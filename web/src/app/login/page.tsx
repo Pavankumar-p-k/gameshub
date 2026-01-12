@@ -39,9 +39,8 @@ export default function LoginPage() {
     try {
       localStorage.setItem("guest", "true");
     } catch (e) {}
-    // Record guest session in Supabase table 'guest_sessions' for analytics (optional)
-    try {
-      supabase.from("guest_sessions").insert({ id: guestId, started_at: new Date().toISOString() }).then(() => {}).catch(() => {});
+    router.push("/games");
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-black text-white">
@@ -65,27 +64,27 @@ export default function LoginPage() {
             type="password"
             required
           />
-                  {error && <div className="text-red-600">{error}</div>}
-                  <button
-                    type="submit"
-                    className="bg-indigo-600 hover:bg-indigo-700 transition text-white rounded-lg p-2 font-medium disabled:opacity-50"
-                    disabled={loading}
-                  >
-                    Sign in
-                  </button>
-        
-                  <div className="mt-4 flex items-center justify-between">
-                    <p className="text-sm text-white">Don&apos;t have an account? <Link href="/signup" className="text-white">Create one</Link></p>
-                    <button
-                      type="button"
-                      onClick={continueAsGuest}
-                      className="text-sm text-white hover:underline"
-                    >
-                      Continue as Guest
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          );
-        }
+          {error && <div className="text-red-600">{error}</div>}
+          <button
+            type="submit"
+            className="bg-indigo-600 hover:bg-indigo-700 transition text-white rounded-lg p-2 font-medium disabled:opacity-50"
+            disabled={loading}
+          >
+            Sign in
+          </button>
+
+          <div className="mt-4 flex items-center justify-between">
+            <p className="text-sm text-white">Don&apos;t have an account? <Link href="/signup" className="text-white">Create one</Link></p>
+            <button
+              type="button"
+              onClick={continueAsGuest}
+              className="text-sm text-white hover:underline"
+            >
+              Continue as Guest
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
