@@ -41,12 +41,7 @@ export default function LoginPage() {
     } catch (e) {}
     // Record guest session in Supabase table 'guest_sessions' for analytics (optional)
     try {
-      const guestId = typeof crypto !== "undefined" && (crypto as any).randomUUID ? (crypto as any).randomUUID() : `guest_${Date.now()}_${Math.floor(Math.random()*1000)}`;
-      // non-blocking write
-      supabase.from("guest_sessions").insert({ id: guestId, started_at: new Date().toISOString() }).catch(() => {});
-    } catch (e) {}
-    router.push("/games/sudoku");
-  }
+      supabase.from("guest_sessions").insert({ id: guestId, started_at: new Date().toISOString() }).then(() => {}).catch(() => {});
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-black text-white">
