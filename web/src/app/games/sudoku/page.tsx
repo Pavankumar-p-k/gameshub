@@ -1,9 +1,8 @@
-export const dynamic = 'force-dynamic';
-
 "use client";
+export const dynamic = "force-dynamic";
 
 import React from "react";
-import SudokuUI from "../../../games/sudoku/ui";
+import SudokuUI from "../../games/sudoku/ui";
 
 export default function SudokuPage() {
   return (
