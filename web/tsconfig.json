@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    // Set baseUrl and path mapping so imports like "@/lib/..." resolve to "src/..."
+    "baseUrl": ".",
     "target": "ES2017",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
@@ -19,7 +21,7 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["src/*"]
     }
   },
   "include": [
