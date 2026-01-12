@@ -34,27 +34,17 @@ export default function SignupPage() {
       // non-fatal: profile creation failed, but auth succeeded
       console.error("Failed to create profile row:", e);
     }
-    setMessage("Check your email for confirmation (if required). Redirecting...");
-    setTimeout(() => router.push("/"), 1200);
-  }
-
-  // Allow users to try the app as a guest without creating an account
-  function continueAsGuest() {
-    try {
-      localStorage.setItem("guest", "true");
-    } catch (e) {}
-    try {
-      const guestId = typeof crypto !== "undefined" && (crypto as any).randomUUID ? (crypto as any).randomUUID() : `guest_${Date.now()}_${Math.floor(Math.random()*1000)}`;
-      supabase.from("guest_sessions").insert({ id: guestId, started_at: new Date().toISOString() }).catch(() => {});
-    } catch (e) {}
-    router.push("/games/sudoku");
+    setMessage("Signup successful! Check your email for verification.");
+    setTimeout(() => {
+      router.push("/login");
+    }, 2000);
   }
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-black text-white">
       <div className="w-full max-w-md bg-black rounded-xl shadow-lg p-8">
-        <h1 className="text-3xl font-extrabold mb-4 text-white">Create your GameHub account</h1>
-        <p className="text-sm text-white mb-6">Register to save progress and access your profile across devices.</p>
+        <h1 className="text-3xl font-extrabold mb-4 text-white">Create Account</h1>
+        <p className="text-sm text-white mb-6">Join GameHub to save your progress and unlock more features.</p>
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <input
             className="border p-2 rounded bg-transparent text-white placeholder-gray-400"
@@ -79,15 +69,11 @@ export default function SignupPage() {
             className="bg-indigo-600 hover:bg-indigo-700 transition text-white rounded-lg p-2 font-medium disabled:opacity-50"
             disabled={loading}
           >
-            {loading ? "Creating..." : "Create account"}
+            Sign Up
           </button>
+          <p className="text-sm text-white text-center">Already have an account? <Link href="/login" className="text-white">Sign in</Link></p>
         </form>
-        <div className="mt-4 flex items-center justify-between">
-          <p className="text-sm text-white">Already have an account? <Link href="/login" className="text-white">Log in</Link></p>
-          <button onClick={continueAsGuest} className="text-sm text-white hover:underline">Try as Guest</button>
-        </div>
       </div>
     </div>
   );
 }
-
