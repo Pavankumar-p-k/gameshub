@@ -69,7 +69,7 @@ export default function Home() {
     <main className="min-h-screen flex flex-col items-center justify-start p-8 gap-6">
       <header className="w-full max-w-4xl flex items-center justify-between">
         <h1 className="text-3xl font-bold">GameHub</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 bg-black p-2 rounded bg-white text-black">
           {session ? (
             <>
               <span className="text-sm text-gray-700">{session.user?.email}</span>
@@ -91,14 +91,14 @@ export default function Home() {
 
       <section className="w-full max-w-4xl">
         <h2 className="text-xl font-semibold mb-4">Games</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 bg-white p-4 rounded shadow bg-black">
           {session || isGuest ? (
             <Link href="/games/sudoku" className="block p-4 border rounded hover:shadow">
               <h3 className="font-bold">Sudoku</h3>
               <p className="text-sm text-gray-600">Classic Sudoku puzzle</p>
             </Link>
           ) : (
-            <div className="block p-4 border rounded hover:shadow">
+            <div className="block p-4 border rounded hover:shadow bg-gray-50">
               <h3 className="font-bold">Sudoku</h3>
               <p className="text-sm text-gray-600 mb-3">Classic Sudoku puzzle</p>
               <button
