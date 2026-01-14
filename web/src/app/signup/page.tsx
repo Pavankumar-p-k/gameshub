@@ -26,7 +26,10 @@ export default function SignupPage() {
     }
     // If user created successfully, also create a profile row in Supabase table 'profiles'
     try {
-      const userId = (data as any)?.user?.id;
+      // Narrow the response shape safely without using `any`
+      type SignUpData = { user?: { id?: string } } | null;
+      const signUpData = data as unknown as SignUpData;
+      const userId = signUpData?.user?.id;
       if (userId) {
         await supabase.from("profiles").upsert({ id: userId, email });
       }

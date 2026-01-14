@@ -29,20 +29,23 @@ export default function SudokuUI() {
 
           return (
             <input
-              key={i}
-              type="text"
-              inputMode="numeric"
-              maxLength={1}
-              value={cell}
-              onChange={(e) => handleChange(i, e.target.value)}
-              className={`
-                w-10 h-10
-                text-center
-                border
-                text-lg font-semibold
-                focus:outline-none
-                ${isValid ? "border-gray-400" : "border-red-500 bg-red-100"}
-              `}
+                  key={i}
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={cell}
+                  onChange={(e) => handleChange(i, e.target.value)}
+                  placeholder="0"
+                  title={`Sudoku cell ${i + 1}. Enter a number 1-9`}
+                  aria-label={`Sudoku cell at position ${i + 1}`}
+                 className={`
+                 w-10 h-10
+                 text-center
+                 border
+                 text-lg font-semibold
+                 focus:outline-none
+                 ${isValid ? "border-gray-400" : "border-red-500 bg-red-100"}
+            `}
             />
           );
         })}
