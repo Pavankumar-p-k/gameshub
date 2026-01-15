@@ -21,7 +21,7 @@ export default function SudokuUI() {
 
   return (
     <div className="flex flex-col items-center gap-4 p-4">
-      <h1 className="text-2xl font-bold">Sudoku</h1>
+      <h1 className="text-2xl font-bold">BAHUBALI</h1>
 
       <div className="grid grid-cols-9 gap-[2px] border-2 border-black">
         {board.map((cell, i) => {
