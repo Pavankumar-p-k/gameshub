@@ -43,7 +43,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-white text-black">
+    <div className="min-h-screen flex items-center justify-center p-6 bg-black text-white">
       <div className="w-full max-w-md bg-black rounded-xl shadow-lg p-8">
         <h1 className="text-3xl font-extrabold mb-4 text-white">Sign in to GameHub</h1>
         <p className="text-sm text-white mb-6">Access your saved games and progress. Or try a guest session.</p>
