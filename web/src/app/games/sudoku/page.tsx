@@ -3,8 +3,7 @@
 export const dynamic = "force-dynamic";
 
 import React from "react";
-import SudokuGame from "gameshub/web/src/games/sudoku
-/ui";
+import SudokuGame from "gameshub/web/src/games/sudoku/ui";
 
 export default function SudokuPage() {
   return (
