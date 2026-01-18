@@ -22,6 +22,7 @@ export function SudokuGame() {
     const { puzzle, solution } = generateSudoku(difficulty);
     const flatPuzzle = flattenBoard(puzzle);
     const flatSolution = flattenBoard(solution);
+
     setPuzzle(flatPuzzle);
     setSolution(flatSolution);
     setBoard(flatPuzzle);
@@ -111,9 +112,9 @@ export function SudokuGame() {
               value={value === 0 ? "" : value}
               onChange={(e) => handleCellChange(index, e.target.value)}
               readOnly={isGiven}
-              className={`flex items-center justify-center text-center text-lg border
-                ${isGiven ? "font-bold" : ""}
-              `}
+              className={`flex items-center justify-center text-center text-lg border ${
+                isGiven ? "font-bold" : ""
+              }`}
               style={{
                 width: "2.5rem",
                 height: "2.5rem",
@@ -146,3 +147,5 @@ export function SudokuGame() {
     </div>
   );
 }
+
+export default SudokuGame;
