@@ -30,84 +30,118 @@ export function SudokuGame() {
 
   const handleCellChange = (index: number, value: string) => {
     if (puzzle[index] !== 0) return;
-    const num = Number(value) || 0;
-    if (num < 0 || num > 9) return;
+
+    const num = value === "" ? 0 : Number(value);
+    if (Number.isNaN(num) || num < 0 || num > 9) return;
 
     const next = [...board];
     next[index] = num;
     setBoard(next);
 
     if (isBoardComplete(next)) {
-      setStatus(isBoardCorrect(next, solution) ? "won" : "error");
+      if (isBoardCorrect(next, solution)) {
+        setStatus("won");
+      } else {
+        setStatus("error");
+      }
     } else {
       setStatus("playing");
     }
   };
 
+  const handleReset = () => {
+    setBoard(puzzle);
+    setStatus("playing");
+  };
+
+  const handleNewGame = (level: Difficulty) => {
+    setDifficulty(level);
+  };
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-300">Difficulty:</span>
-          <select
-            value={difficulty}
-            onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-            className="rounded border border-gray-600 bg-neutral-900 px-2 py-1 text-sm"
-          >
-            <option value="easy">Easy</option>
-            <option value="medium">Medium</option>
-            <option value="hard">Hard</option>
-            <option value="expert">Expert</option>
-          </select>
-        </div>
+    <div className="flex flex-col items-center gap-4 p-4">
+      <h1 className="text-2xl font-bold">Sudoku</h1>
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => handleNewGame("easy")}
+          className={`px-3 py-1 rounded ${
+            difficulty === "easy" ? "bg-blue-500 text-white" : "bg-gray-200"
+          }`}
+        >
+          Easy
+        </button>
+        <button
+          onClick={() => handleNewGame("medium")}
+          className={`px-3 py-1 rounded ${
+            difficulty === "medium" ? "bg-blue-500 text-white" : "bg-gray-200"
+          }`}
+        >
+          Medium
+        </button>
+        <button
+          onClick={() => handleNewGame("hard")}
+          className={`px-3 py-1 rounded ${
+            difficulty === "hard" ? "bg-blue-500 text-white" : "bg-gray-200"
+          }`}
+        >
+          Hard
+        </button>
+      </div>
+
+      <div
+        className="grid"
+        style={{
+          gridTemplateColumns: "repeat(9, 2.5rem)",
+          gridTemplateRows: "repeat(9, 2.5rem)",
+          gap: "2px",
+        }}
+      >
+        {board.map((value, index) => {
+          const isGiven = puzzle[index] !== 0;
+          const { row, col } = indexToRowCol(index);
+          const isBoxBorderBottom = (row + 1) % 3 === 0 && row !== 8;
+          const isBoxBorderRight = (col + 1) % 3 === 0 && col !== 8;
+
+          return (
+            <input
+              key={index}
+              type="text"
+              maxLength={1}
+              value={value === 0 ? "" : value}
+              onChange={(e) => handleCellChange(index, e.target.value)}
+              readOnly={isGiven}
+              className={`flex items-center justify-center text-center text-lg border
+                ${isGiven ? "font-bold" : ""}
+              `}
+              style={{
+                width: "2.5rem",
+                height: "2.5rem",
+                color: getNumberColor(value),
+                backgroundColor: getNumberColorLight(value),
+                borderBottomWidth: isBoxBorderBottom ? 2 : 1,
+                borderRightWidth: isBoxBorderRight ? 2 : 1,
+              }}
+            />
+          );
+        })}
+      </div>
+
+      <div className="flex gap-3 items-center">
+        <button
+          onClick={handleReset}
+          className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+        >
+          Reset
+        </button>
         {status === "won" && (
-          <span className="text-sm font-semibold text-emerald-400">
-            You solved the puzzle!
-          </span>
+          <span className="text-green-600 font-semibold">You solved it!</span>
         )}
         {status === "error" && (
-          <span className="text-sm font-semibold text-red-400">
+          <span className="text-red-600 font-semibold">
             Some numbers are incorrect.
           </span>
         )}
-      </div>
-
-      <div className="grid grid-cols-9 gap-[2px] bg-neutral-800 p-[2px] rounded-lg">
-        {board.map((value, index) => {
-          const [row, col] = indexToRowCol(index);
-          const isPrefilled = puzzle[index] !== 0;
-          const displayValue = value === 0 ? "" : String(value);
-          const color =
-            value > 0 ? getNumberColor(value) : "rgba(255,255,255,0.8)";
-          const bg =
-            value > 0 ? getNumberColorLight(value) : "rgba(0,0,0,0.8)";
-          const borderClasses = [
-            row % 3 === 0 ? "border-t-2 border-neutral-700" : "",
-            col % 3 === 0 ? "border-l-2 border-neutral-700" : "",
-          ].join(" ");
-
-          return (
-            <div
-              key={index}
-              className={`relative aspect-square ${borderClasses}`}
-            >
-              <input
-                value={displayValue}
-                onChange={(e) => handleCellChange(index, e.target.value)}
-                className={`w-full h-full text-center text-lg font-semibold outline-none ${
-                  isPrefilled ? "cursor-default" : "cursor-text"
-                }`}
-                style={{
-                  color: isPrefilled ? "#fff" : color,
-                  backgroundColor: isPrefilled ? "#111827" : bg,
-                }}
-                disabled={isPrefilled}
-                inputMode="numeric"
-                maxLength={1}
-              />
-            </div>
-          );
-        })}
       </div>
     </div>
   );
