@@ -101,7 +101,8 @@ export function SudokuGame() {
       >
         {board.map((value, index) => {
           const isGiven = puzzle[index] !== 0;
-          const {row,col }= indexToRowCol(index);
+         const [row, col] = indexToRowCol(index);
+
           const isBoxBorderBottom = (row + 1) % 3 === 0 && row !== 8;
           const isBoxBorderRight = (col + 1) % 3 === 0 && col !== 8;
 
