@@ -46,7 +46,7 @@ export default function Home() {
      
         listener?.subscription?.unsubscribe?.();
 
-        listener?.unsubscribe?.();
+        listener?.subscription?.unsubscribe?.();
       } catch (e) {}
     };
   }, []);
