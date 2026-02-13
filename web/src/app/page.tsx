@@ -1,293 +1,218 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { GAME_CATALOG, gameHref } from "@/config/gameCatalog";
 import { supabase } from "@/lib/supabaseClient";
 
-export default function Home() {
+function readGuestFlag(): boolean {
+  try {
+    return window.localStorage.getItem("guest") === "true";
+  } catch {
+    return false;
+  }
+}
+
+export default function HomePage() {
   const router = useRouter();
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [isGuest, setIsGuest] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
-    async function load() {
-      const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
-      setSession(data.session ?? null);
-      // detect guest flag for lightweight access
-      try {
-        const guestFlag = localStorage.getItem("guest");
-        setIsGuest(guestFlag === "true");
-      } catch (e) {
-        setIsGuest(false);
-      }
-    }
-    load();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s ?? null);
-      if (s) setIsGuest(false);
-      if (!s) {
-        try {
-          const guestFlag = localStorage.getItem("guest");
-          setIsGuest(guestFlag === "true");
-        } catch (e) {
-          setIsGuest(false);
-        }
+    async function syncSession() {
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) {
+        return;
       }
+
+      setSession(data.session);
+      setIsGuest(data.session ? false : readGuestFlag());
+      setLoading(false);
+    }
+
+    syncSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setIsGuest(nextSession ? false : readGuestFlag());
     });
 
     return () => {
       mounted = false;
-      try {
-        // unsubscribe if available
-     
-        listener?.subscription?.unsubscribe?.();
-
-        listener?.subscription?.unsubscribe?.();
-      } catch (e) {}
+      authListener.subscription.unsubscribe();
     };
   }, []);
 
-  async function handleLogout() {
+  const startGuestSession = () => {
+    try {
+      window.localStorage.setItem("guest", "true");
+    } catch {
+      return;
+    }
+    setIsGuest(true);
+  };
+
+  const endGuestSession = () => {
+    try {
+      window.localStorage.removeItem("guest");
+    } catch {
+      return;
+    }
+    setIsGuest(false);
+    router.push("/");
+  };
+
+  const logout = async () => {
     await supabase.auth.signOut();
     setSession(null);
     router.push("/");
-  }
+  };
 
-  function endGuestSession() {
-    try {
-      localStorage.removeItem("guest");
-    } catch (e) {}
-    setIsGuest(false);
-    router.push("/");
-  }
+  const launchGame = (slug: string) => {
+    if (!session && !isGuest) {
+      startGuestSession();
+    }
+    router.push(gameHref(slug));
+  };
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-start p-8 gap-6 text-black bg-gray-100">
-      <header className="w-full max-w-4xl flex items-center justify-between">
-        <h1 className="text-3xl font-bold">GameHub</h1>
-        <div className="flex items-center gap-3 bg-black p-2 rounded bg-white text-black">
-          {session ? (
-            <>
-              <span className="text-sm text-black">{session.user?.email}</span>
-              <button onClick={handleLogout} className="px-3 py-1 border rounded">Logout</button>
-            </>
-          ) : isGuest ? (
-            <>
-              <span className="text-sm text-gray-700">Guest</span>
-              <button onClick={endGuestSession} className="px-3 py-1 border rounded">End Guest Session</button>
-            </>
-          ) : (
-            <>
-              <Link href="/login" className="px-3 py-1 border rounded">Login</Link>
-              <Link href="/signup" className="px-3 py-1 bg-indigo-600 text-white rounded">Sign up</Link>
-            </>
-          )}
-        </div>
-      </header>
+    <main className="hub-shell min-h-screen px-4 py-6 md:px-8 md:py-10">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 page-enter">
+        <header className="glass-panel rounded-3xl p-6 md:p-8">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div className="space-y-3">
+              <span className="chip">Online Platform</span>
+              <h1 className="brand-title text-3xl leading-tight text-[var(--text-primary)] md:text-5xl">
+                GameHub Arena
+              </h1>
+              <p className="max-w-2xl text-sm text-[var(--text-muted)] md:text-base">
+                Play instantly across classic arcade, puzzle, and strategy experiences.
+                The hub now includes stronger game loops, cleaner controls, and themed UI modes.
+              </p>
+            </div>
+            <div className="flex flex-col gap-3">
+              <ThemeToggle />
+              <div className="flex flex-wrap gap-2">
+                {session ? (
+                  <>
+                    <span className="chip">{session.user.email ?? "Signed in player"}</span>
+                    <button
+                      type="button"
+                      onClick={logout}
+                      className="focus-ring rounded-full border border-[var(--border-soft)] bg-[var(--surface-2)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)] transition hover:text-[var(--text-primary)]"
+                    >
+                      Logout
+                    </button>
+                  </>
+                ) : isGuest ? (
+                  <>
+                    <span className="chip">Guest Session Active</span>
+                    <button
+                      type="button"
+                      onClick={endGuestSession}
+                      className="focus-ring rounded-full border border-[var(--border-soft)] bg-[var(--surface-2)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)] transition hover:text-[var(--text-primary)]"
+                    >
+                      End Guest
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <Link
+                      href="/login"
+                      className="focus-ring rounded-full border border-[var(--border-soft)] bg-[var(--surface-2)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)] transition hover:text-[var(--text-primary)]"
+                    >
+                      Login
+                    </Link>
+                    <Link
+                      href="/signup"
+                      className="focus-ring rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-[var(--accent-strong)]"
+                    >
+                      Create Account
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={startGuestSession}
+                      className="focus-ring rounded-full border border-[var(--border-soft)] bg-[var(--surface-2)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)] transition hover:text-[var(--text-primary)]"
+                    >
+                      Quick Play
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </header>
 
-      <section className="w-full max-w-4xl">
-        <h2 className="text-xl font-semibold mb-4">Games</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 bg-white p-4 rounded shadow bg-black">
-          {session || isGuest ? (
-            <>
-              <Link href="/games/sudoku" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Sudoku</h3>
-                <p className="text-sm text-gray-600">Classic Sudoku puzzle</p>
+        <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
+          <aside className="glass-panel flex flex-col gap-4 rounded-3xl p-5">
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-[0.22em] text-[var(--text-muted)]">Platform Status</p>
+              <h2 className="text-2xl font-semibold text-[var(--text-primary)]">
+                {loading ? "Syncing..." : session ? "Signed In" : isGuest ? "Guest Mode" : "Visitor"}
+              </h2>
+            </div>
+            <div className="rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-2)] p-4">
+              <p className="text-sm text-[var(--text-muted)]">
+                Total games
+                <span className="mt-2 block text-3xl font-semibold text-[var(--text-primary)]">
+                  {GAME_CATALOG.length}
+                </span>
+              </p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-[0.22em] text-[var(--text-muted)]">Quick Links</p>
+              <Link
+                href="/games"
+                className="focus-ring block rounded-xl border border-[var(--border-soft)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--text-primary)] transition hover:border-[var(--border-strong)]"
+              >
+                Open Games Directory
               </Link>
-              <Link href="/games/dinosaur" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Dinosaur</h3>
-                <p className="text-sm text-gray-600">Chrome Dino Runner</p>
+              <Link
+                href="/login"
+                className="focus-ring block rounded-xl border border-[var(--border-soft)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--text-primary)] transition hover:border-[var(--border-strong)]"
+              >
+                Account Access
               </Link>
-              <Link href="/games/wordle" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Wordle</h3>
-                <p className="text-sm text-gray-600">Word guessing game</p>
-              </Link>
-              <Link href="/games/slither" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Slither</h3>
-                <p className="text-sm text-gray-600">Snake game</p>
-              </Link>
-              <Link href="/games/krunker" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Krunker</h3>
-                <p className="text-sm text-gray-600">2D Shooter</p>
-              </Link>
-              <Link href="/games/tictactoe" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Tic Tac Toe</h3>
-                <p className="text-sm text-gray-600">Classic Tic Tac Toe</p>
-              </Link>
-              <Link href="/games/snake" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Snake</h3>
-                <p className="text-sm text-gray-600">Snake game with score</p>
-              </Link>
-              <Link href="/games/tetris" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Tetris</h3>
-                <p className="text-sm text-gray-600">Block puzzle game</p>
-              </Link>
-              <Link href="/games/2048" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">2048</h3>
-                <p className="text-sm text-gray-600">Number sliding game</p>
-              </Link>
-              <Link href="/games/minesweeper" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Minesweeper</h3>
-                <p className="text-sm text-gray-600">Minefield puzzle</p>
-              </Link>
-              <Link href="/games/pong" className="block p-4 border rounded hover:shadow">
-                <h3 className="font-bold">Pong</h3>
-                <p className="text-sm text-gray-600">Classic Pong</p>
-              </Link>
-            </>
-          ) : (
-            <>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Sudoku</h3>
-                <p className="text-sm text-gray-600 mb-3">Classic Sudoku puzzle</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/sudoku");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Dinosaur</h3>
-                <p className="text-sm text-black mb-3">Chrome Dino Runner</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/dinosaur");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Wordle</h3>
-                <p className="text-sm text-black mb-3">Word guessing game</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/wordle");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Slither</h3>
-                <p className="text-sm text-black mb-3">Snake game</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/slither");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Krunker</h3>
-                <p className="text-sm text-black mb-3">2D Shooter</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/krunker");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Tic Tac Toe</h3>
-                <p className="text-sm text-black mb-3">Classic Tic Tac Toe</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/tictactoe");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Snake</h3>
-                <p className="text-sm text-black mb-3">Snake game with score</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/snake");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Tetris</h3>
-                <p className="text-sm text-black mb-3">Block puzzle game</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/tetris");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">2048</h3>
-                <p className="text-sm text-black mb-3">Number sliding game</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/2048");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Minesweeper</h3>
-                <p className="text-sm text-black mb-3">Minefield puzzle</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/minesweeper");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-              <div className="block p-4 border rounded hover:shadow bg-black-50">
-                <h3 className="font-bold text-black">Pong</h3>
-                <p className="text-sm text-black mb-3">Classic Pong</p>
-                <button
-                  onClick={() => {
-                    try { localStorage.setItem("guest", "true"); } catch (e) {}
-                    router.push("/games/pong");
-                  }}
-                  className="mt-2 inline-block px-3 py-1 bg-indigo-600 text-white rounded"
-                >
-                  Play as Guest
-                </button>
-              </div>
-            </>
-          )}
+            </div>
+          </aside>
+
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-2xl font-semibold text-[var(--text-primary)] md:text-3xl">Games Library</h2>
+              <span className="chip">Keyboard + Mobile Controls</span>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 stagger">
+              {GAME_CATALOG.map((game) => (
+                <article key={game.slug} className="glass-tile rounded-2xl p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-lg font-semibold text-[var(--text-primary)]">{game.name}</h3>
+                    <span className="chip">{game.tag}</span>
+                  </div>
+                  <p className="mt-3 text-sm text-[var(--text-muted)]">{game.description}</p>
+                  <div className="mt-4 flex items-center justify-between">
+                    <span className="text-xs uppercase tracking-[0.16em] text-[var(--text-muted)]">
+                      Difficulty {game.difficulty}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => launchGame(game.slug)}
+                      className="focus-ring rounded-full border border-[var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-[var(--accent-strong)]"
+                    >
+                      Play
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
         </div>
-      </section>
+      </div>
     </main>
   );
 }

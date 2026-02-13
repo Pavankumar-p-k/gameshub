@@ -1,43 +1,78 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-type Theme = "light" | "dark";
+export const THEME_OPTIONS = [
+  { id: "arcade", label: "Arcade" },
+  { id: "midnight", label: "Midnight" },
+  { id: "sunset", label: "Sunset" },
+] as const;
+
+export type ThemeName = (typeof THEME_OPTIONS)[number]["id"];
 
 interface ThemeContextType {
-  theme: Theme;
-  toggleTheme: () => void;
+  theme: ThemeName;
+  options: readonly { id: ThemeName; label: string }[];
+  setTheme: (theme: ThemeName) => void;
+  cycleTheme: () => void;
 }
+
+const STORAGE_KEY = "gamehub-theme";
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+function isThemeName(value: string | null): value is ThemeName {
+  return Boolean(value && THEME_OPTIONS.some((option) => option.id === value));
+}
+
+function resolveInitialTheme(): ThemeName {
+  if (typeof window === "undefined") {
+    return "arcade";
+  }
+
+  const storedTheme = window.localStorage.getItem(STORAGE_KEY);
+  if (isThemeName(storedTheme)) {
+    return storedTheme;
+  }
+
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "midnight" : "arcade";
+}
+
+function applyTheme(theme: ThemeName): void {
+  document.documentElement.setAttribute("data-theme", theme);
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("light");
+  const [theme, setThemeState] = useState<ThemeName>(resolveInitialTheme);
 
   useEffect(() => {
-    const savedTheme = localStorage.getItem("theme") as Theme | null;
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const initialTheme = savedTheme ?? (prefersDark ? "dark" : "light");
+    applyTheme(theme);
+    window.localStorage.setItem(STORAGE_KEY, theme);
+  }, [theme]);
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setTheme(initialTheme);
-    document.documentElement.classList.toggle("dark", initialTheme === "dark");
+  const setTheme = useCallback((nextTheme: ThemeName) => {
+    setThemeState(nextTheme);
   }, []);
 
-  const toggleTheme = () => {
-    setTheme((prev) => {
-      const next = prev === "light" ? "dark" : "light";
-      localStorage.setItem("theme", next);
-      document.documentElement.classList.toggle("dark", next === "dark");
-      return next;
+  const cycleTheme = useCallback(() => {
+    setThemeState((currentTheme) => {
+      const currentIndex = THEME_OPTIONS.findIndex((option) => option.id === currentTheme);
+      const nextIndex = (currentIndex + 1) % THEME_OPTIONS.length;
+      return THEME_OPTIONS[nextIndex].id;
     });
-  };
+  }, []);
 
-  return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      {children}
-    </ThemeContext.Provider>
+  const value = useMemo<ThemeContextType>(
+    () => ({
+      theme,
+      options: THEME_OPTIONS,
+      setTheme,
+      cycleTheme,
+    }),
+    [cycleTheme, setTheme, theme]
   );
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme() {
