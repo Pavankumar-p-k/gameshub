@@ -6,7 +6,7 @@ export interface GameProgress {
   level?: number;
   status?: 'playing' | 'completed' | 'paused';
   playTime?: number; // in seconds
-  gameData?: Record<string, any>; // game-specific data
+  gameData?: Record<string, unknown>; // game-specific data
 }
 
 /**

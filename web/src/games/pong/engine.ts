@@ -1,66 +1,121 @@
+export interface BallState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+}
+
 export interface GameState {
   playerY: number;
   aiY: number;
-  ball: { x: number; y: number; dx: number; dy: number };
+  ball: BallState;
   playerScore: number;
   aiScore: number;
-  gameOver: boolean;
+  winner: "Player" | "AI" | null;
 }
 
-export const CANVAS_WIDTH = 400;
-export const CANVAS_HEIGHT = 400;
-export const PADDLE_WIDTH = 10;
-export const PADDLE_HEIGHT = 50;
-export const BALL_SIZE = 5;
+export const CANVAS_WIDTH = 640;
+export const CANVAS_HEIGHT = 360;
+export const PADDLE_WIDTH = 12;
+export const PADDLE_HEIGHT = 72;
+export const BALL_RADIUS = 8;
+const WIN_SCORE = 7;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function serveBall(toPlayer: boolean): BallState {
+  const direction = toPlayer ? -1 : 1;
+  return {
+    x: CANVAS_WIDTH / 2,
+    y: CANVAS_HEIGHT / 2,
+    vx: 5 * direction,
+    vy: (Math.random() * 4 - 2) || 1.2,
+  };
+}
 
 export function initializeGame(): GameState {
   return {
-    playerY: 175,
-    aiY: 175,
-    ball: { x: 200, y: 200, dx: 5, dy: 5 },
+    playerY: CANVAS_HEIGHT / 2 - PADDLE_HEIGHT / 2,
+    aiY: CANVAS_HEIGHT / 2 - PADDLE_HEIGHT / 2,
+    ball: serveBall(false),
     playerScore: 0,
     aiScore: 0,
-    gameOver: false,
+    winner: null,
+  };
+}
+
+export function movePlayer(state: GameState, direction: -1 | 1): GameState {
+  return {
+    ...state,
+    playerY: clamp(state.playerY + direction * 20, 0, CANVAS_HEIGHT - PADDLE_HEIGHT),
   };
 }
 
 export function updateGame(state: GameState): GameState {
-  if (state.gameOver) return state;
-
-  const newState = { ...state };
-  newState.ball.x += newState.ball.dx;
-  newState.ball.y += newState.ball.dy;
-
-  // Ball collision with top/bottom
-  if (newState.ball.y <= 0 || newState.ball.y >= CANVAS_HEIGHT) {
-    newState.ball.dy = -newState.ball.dy;
+  if (state.winner) {
+    return state;
   }
 
-  // Ball collision with paddles
+  const nextBall = { ...state.ball };
+  nextBall.x += nextBall.vx;
+  nextBall.y += nextBall.vy;
+
+  if (nextBall.y - BALL_RADIUS <= 0 || nextBall.y + BALL_RADIUS >= CANVAS_HEIGHT) {
+    nextBall.vy *= -1;
+    nextBall.y = clamp(nextBall.y, BALL_RADIUS, CANVAS_HEIGHT - BALL_RADIUS);
+  }
+
+  const playerPaddleX = 24;
+  const aiPaddleX = CANVAS_WIDTH - 24 - PADDLE_WIDTH;
+
   if (
-    (newState.ball.x <= 20 && newState.ball.x >= 10 && newState.ball.y >= newState.playerY && newState.ball.y <= newState.playerY + PADDLE_HEIGHT) ||
-    (newState.ball.x >= 380 && newState.ball.x <= 390 && newState.ball.y >= newState.aiY && newState.ball.y <= newState.aiY + PADDLE_HEIGHT)
+    nextBall.x - BALL_RADIUS <= playerPaddleX + PADDLE_WIDTH &&
+    nextBall.x > playerPaddleX &&
+    nextBall.y >= state.playerY &&
+    nextBall.y <= state.playerY + PADDLE_HEIGHT
   ) {
-    newState.ball.dx = -newState.ball.dx;
+    nextBall.vx = Math.abs(nextBall.vx) * 1.04;
+    nextBall.vy += ((nextBall.y - (state.playerY + PADDLE_HEIGHT / 2)) / (PADDLE_HEIGHT / 2)) * 1.4;
   }
 
-  // Score
-  if (newState.ball.x < 0) {
-    newState.aiScore++;
-    newState.ball = { x: 200, y: 200, dx: 5, dy: 5 };
-  } else if (newState.ball.x > CANVAS_WIDTH) {
-    newState.playerScore++;
-    newState.ball = { x: 200, y: 200, dx: -5, dy: 5 };
+  if (
+    nextBall.x + BALL_RADIUS >= aiPaddleX &&
+    nextBall.x < aiPaddleX + PADDLE_WIDTH &&
+    nextBall.y >= state.aiY &&
+    nextBall.y <= state.aiY + PADDLE_HEIGHT
+  ) {
+    nextBall.vx = -Math.abs(nextBall.vx) * 1.04;
+    nextBall.vy += ((nextBall.y - (state.aiY + PADDLE_HEIGHT / 2)) / (PADDLE_HEIGHT / 2)) * 1.4;
   }
 
-  // AI movement
-  if (newState.aiY + 25 < newState.ball.y) newState.aiY = Math.min(newState.aiY + 3, CANVAS_HEIGHT - PADDLE_HEIGHT);
-  else if (newState.aiY + 25 > newState.ball.y) newState.aiY = Math.max(newState.aiY - 3, 0);
+  let playerScore = state.playerScore;
+  let aiScore = state.aiScore;
+  let ball = nextBall;
 
-  return newState;
-}
+  if (nextBall.x < -BALL_RADIUS) {
+    aiScore += 1;
+    ball = serveBall(false);
+  } else if (nextBall.x > CANVAS_WIDTH + BALL_RADIUS) {
+    playerScore += 1;
+    ball = serveBall(true);
+  }
 
-export function movePlayer(state: GameState, direction: number): GameState {
-  const newY = Math.max(0, Math.min(state.playerY + direction * 10, CANVAS_HEIGHT - PADDLE_HEIGHT));
-  return { ...state, playerY: newY };
+  const winner = playerScore >= WIN_SCORE ? "Player" : aiScore >= WIN_SCORE ? "AI" : null;
+
+  const aiCenter = state.aiY + PADDLE_HEIGHT / 2;
+  const aiTarget = ball.y;
+  const aiSpeed = 4.2;
+  const aiDelta = clamp(aiTarget - aiCenter, -aiSpeed, aiSpeed);
+  const aiY = clamp(state.aiY + aiDelta, 0, CANVAS_HEIGHT - PADDLE_HEIGHT);
+
+  return {
+    ...state,
+    playerScore,
+    aiScore,
+    aiY,
+    ball,
+    winner,
+  };
 }

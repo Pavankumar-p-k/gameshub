@@ -1,115 +1,247 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { GameFrame } from "@/components/GameFrame";
 
 interface Point {
   x: number;
   y: number;
 }
 
+interface SlitherState {
+  snake: Point[];
+  direction: Point;
+  queuedDirection: Point;
+  food: Point;
+  score: number;
+  speed: number;
+  gameOver: boolean;
+}
+
+const COLS = 30;
+const ROWS = 20;
+const CELL_SIZE = 18;
+
+function randomFood(snake: Point[]): Point {
+  let candidate: Point = { x: 0, y: 0 };
+
+  do {
+    candidate = {
+      x: Math.floor(Math.random() * COLS),
+      y: Math.floor(Math.random() * ROWS),
+    };
+  } while (snake.some((segment) => segment.x === candidate.x && segment.y === candidate.y));
+
+  return candidate;
+}
+
+function createInitialState(): SlitherState {
+  const snake = [{ x: 8, y: 10 }, { x: 7, y: 10 }, { x: 6, y: 10 }];
+  return {
+    snake,
+    direction: { x: 1, y: 0 },
+    queuedDirection: { x: 1, y: 0 },
+    food: randomFood(snake),
+    score: 0,
+    speed: 130,
+    gameOver: false,
+  };
+}
+
+function advanceGame(state: SlitherState): SlitherState {
+  if (state.gameOver) {
+    return state;
+  }
+
+  const direction = state.queuedDirection;
+  const head = {
+    x: (state.snake[0].x + direction.x + COLS) % COLS,
+    y: (state.snake[0].y + direction.y + ROWS) % ROWS,
+  };
+
+  if (state.snake.some((segment) => segment.x === head.x && segment.y === head.y)) {
+    return { ...state, gameOver: true };
+  }
+
+  const snake = [head, ...state.snake];
+  let food = state.food;
+  let score = state.score;
+  let speed = state.speed;
+
+  if (head.x === state.food.x && head.y === state.food.y) {
+    score += 5;
+    speed = Math.max(70, state.speed - 2);
+    food = randomFood(snake);
+  } else {
+    snake.pop();
+  }
+
+  return {
+    snake,
+    direction,
+    queuedDirection: direction,
+    food,
+    score,
+    speed,
+    gameOver: false,
+  };
+}
+
+function canTurn(current: Point, next: Point): boolean {
+  return !(current.x + next.x === 0 && current.y + next.y === 0);
+}
+
 export function SlitherGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [snake, setSnake] = useState<Point[]>([{ x: 200, y: 200 }]);
-  const [direction, setDirection] = useState<Point>({ x: 10, y: 0 });
-  const [food, setFood] = useState<Point>({ x: 100, y: 100 });
-  const [gameOver, setGameOver] = useState(false);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const [state, setState] = useState<SlitherState>(createInitialState);
+
+  const resetGame = useCallback(() => {
+    setState(createInitialState());
+  }, []);
+
+  const queueDirection = useCallback((nextDirection: Point) => {
+    setState((previous) => {
+      if (!canTurn(previous.direction, nextDirection)) {
+        return previous;
+      }
+
+      return { ...previous, queuedDirection: nextDirection };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (state.gameOver) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setState((previous) => advanceGame(previous));
+    }, state.speed);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [state]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "ArrowUp" || event.key === "w" || event.key === "W") {
+        event.preventDefault();
+        queueDirection({ x: 0, y: -1 });
+      } else if (event.key === "ArrowDown" || event.key === "s" || event.key === "S") {
+        event.preventDefault();
+        queueDirection({ x: 0, y: 1 });
+      } else if (event.key === "ArrowLeft" || event.key === "a" || event.key === "A") {
+        event.preventDefault();
+        queueDirection({ x: -1, y: 0 });
+      } else if (event.key === "ArrowRight" || event.key === "d" || event.key === "D") {
+        event.preventDefault();
+        queueDirection({ x: 1, y: 0 });
+      } else if (event.key === "r" || event.key === "R") {
+        event.preventDefault();
+        resetGame();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [queueDirection, resetGame]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!canvas) {
+      return;
+    }
 
-    let animationId: any;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
 
-    const gameLoop = () => {
-      if (gameOver) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
 
-      const head = { x: snake[0].x + direction.x, y: snake[0].y + direction.y };
+    const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, "rgba(225, 76, 255, 0.18)");
+    gradient.addColorStop(1, "rgba(18, 23, 45, 0.8)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Check collision with walls
-      if (head.x < 0 || head.x >= canvas.width || head.y < 0 || head.y >= canvas.height) {
-        setGameOver(true);
-        return;
+    context.fillStyle = "#22d3ee";
+    state.snake.forEach((segment, index) => {
+      context.fillRect(
+        segment.x * CELL_SIZE,
+        segment.y * CELL_SIZE,
+        CELL_SIZE - 2,
+        CELL_SIZE - 2
+      );
+      if (index === 0) {
+        context.fillStyle = "#67e8f9";
+        context.fillRect(
+          segment.x * CELL_SIZE + 3,
+          segment.y * CELL_SIZE + 3,
+          CELL_SIZE - 8,
+          CELL_SIZE - 8
+        );
+        context.fillStyle = "#22d3ee";
       }
+    });
 
-      // Check self collision
-      if (snake.some(segment => segment.x === head.x && segment.y === head.y)) {
-        setGameOver(true);
-        return;
-      }
+    context.fillStyle = "#fb7185";
+    context.fillRect(state.food.x * CELL_SIZE, state.food.y * CELL_SIZE, CELL_SIZE - 2, CELL_SIZE - 2);
+  }, [state]);
 
-      const newSnake = [head, ...snake];
+  const onTouchStart = (event: React.TouchEvent<HTMLCanvasElement>) => {
+    const touch = event.touches[0];
+    touchStart.current = { x: touch.clientX, y: touch.clientY };
+  };
 
-      // Check food
-      if (head.x === food.x && head.y === food.y) {
-        setFood({
-          x: Math.floor(Math.random() * (canvas.width / 10)) * 10,
-          y: Math.floor(Math.random() * (canvas.height / 10)) * 10,
-        });
-      } else {
-        newSnake.pop();
-      }
+  const onTouchEnd = (event: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!touchStart.current) {
+      return;
+    }
 
-      setSnake(newSnake);
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - touchStart.current.x;
+    const dy = touch.clientY - touchStart.current.y;
+    const threshold = 24;
 
-      // Draw
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "green";
-      newSnake.forEach(segment => ctx.fillRect(segment.x, segment.y, 10, 10));
-      ctx.fillStyle = "red";
-      ctx.fillRect(food.x, food.y, 10, 10);
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
+      queueDirection({ x: dx > 0 ? 1 : -1, y: 0 });
+    } else if (Math.abs(dy) > threshold) {
+      queueDirection({ x: 0, y: dy > 0 ? 1 : -1 });
+    }
 
-      animationId = setTimeout(gameLoop, 100);
-    };
-
-    gameLoop();
-
-    return () => clearTimeout(animationId);
-  }, [snake, direction, food, gameOver]);
-
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case "ArrowUp":
-          if (direction.y === 0) setDirection({ x: 0, y: -10 });
-          break;
-        case "ArrowDown":
-          if (direction.y === 0) setDirection({ x: 0, y: 10 });
-          break;
-        case "ArrowLeft":
-          if (direction.x === 0) setDirection({ x: -10, y: 0 });
-          break;
-        case "ArrowRight":
-          if (direction.x === 0) setDirection({ x: 10, y: 0 });
-          break;
-      }
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [direction]);
-
-  const resetGame = () => {
-    setSnake([{ x: 200, y: 200 }]);
-    setDirection({ x: 10, y: 0 });
-    setFood({ x: 100, y: 100 });
-    setGameOver(false);
+    touchStart.current = null;
   };
 
   return (
-    <div className="flex flex-col items-center gap-4 p-4">
-      <h1 className="text-2xl font-bold">Slither (Snake)</h1>
-      <canvas ref={canvasRef} width={400} height={400} className="border" />
-      <p>Use arrow keys to move</p>
-      {gameOver && (
-        <div>
-          <p>Game Over!</p>
-          <button onClick={resetGame} className="px-3 py-1 bg-blue-500 text-white rounded">
+    <GameFrame
+      title="Slither"
+      subtitle="Wrapped arena snake mode with rising speed."
+      status={state.gameOver ? "Crashed" : "Hunting"}
+      actions={
+        <>
+          <span className="chip">Score {state.score}</span>
+          <span className="chip">Length {state.snake.length}</span>
+          <button
+            type="button"
+            onClick={resetGame}
+            className="focus-ring rounded-full border border-[var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-[var(--accent-strong)]"
+          >
             Restart
           </button>
-        </div>
-      )}
-    </div>
+        </>
+      }
+      footer="Controls: Arrow keys or WASD. Swipe on touch devices. Press R to restart."
+    >
+      <canvas
+        ref={canvasRef}
+        width={COLS * CELL_SIZE}
+        height={ROWS * CELL_SIZE}
+        className="mx-auto w-full max-w-[640px] rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-2)]"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      />
+    </GameFrame>
   );
 }
 

@@ -1,240 +1,210 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { GameFrame } from "@/components/GameFrame";
 
-/* =======================
-   Types
-======================= */
-interface Sprite {
-  img: HTMLImageElement;
+interface Obstacle {
+  x: number;
   width: number;
   height: number;
 }
 
-interface Obstacle {
-  x: number;
+interface DinoState {
   y: number;
+  vy: number;
+  obstacles: Obstacle[];
+  score: number;
+  gameOver: boolean;
 }
 
-/* =======================
-   Component
-======================= */
+const CANVAS_WIDTH = 640;
+const CANVAS_HEIGHT = 240;
+const GROUND_Y = 180;
+const DINO_X = 72;
+const DINO_WIDTH = 42;
+const DINO_HEIGHT = 44;
+
+function overlaps(
+  first: { x: number; y: number; width: number; height: number },
+  second: { x: number; y: number; width: number; height: number }
+): boolean {
+  return (
+    first.x < second.x + second.width &&
+    first.x + first.width > second.x &&
+    first.y < second.y + second.height &&
+    first.y + first.height > second.y
+  );
+}
+
+function createInitialState(): DinoState {
+  return {
+    y: GROUND_Y - DINO_HEIGHT,
+    vy: 0,
+    obstacles: [],
+    score: 0,
+    gameOver: false,
+  };
+}
+
+function updateGame(state: DinoState): DinoState {
+  if (state.gameOver) {
+    return state;
+  }
+
+  let vy = state.vy + 0.9;
+  let y = state.y + vy;
+  if (y >= GROUND_Y - DINO_HEIGHT) {
+    y = GROUND_Y - DINO_HEIGHT;
+    vy = 0;
+  }
+
+  let obstacles = state.obstacles
+    .map((obstacle) => ({ ...obstacle, x: obstacle.x - 7 }))
+    .filter((obstacle) => obstacle.x + obstacle.width > -40);
+
+  const lastObstacle = obstacles[obstacles.length - 1];
+  if (!lastObstacle || lastObstacle.x < CANVAS_WIDTH - (170 + Math.random() * 140)) {
+    obstacles = [
+      ...obstacles,
+      {
+        x: CANVAS_WIDTH + 12,
+        width: 26 + Math.floor(Math.random() * 14),
+        height: 36 + Math.floor(Math.random() * 24),
+      },
+    ];
+  }
+
+  const dinoRect = { x: DINO_X, y, width: DINO_WIDTH, height: DINO_HEIGHT };
+  const hit = obstacles.some((obstacle) =>
+    overlaps(dinoRect, {
+      x: obstacle.x,
+      y: GROUND_Y - obstacle.height,
+      width: obstacle.width,
+      height: obstacle.height,
+    })
+  );
+
+  return {
+    y,
+    vy,
+    obstacles,
+    score: state.score + 1,
+    gameOver: hit,
+  };
+}
+
 export default function DinosaurGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [state, setState] = useState<DinoState>(createInitialState);
 
-  // UI state only
-  const [score, setScore] = useState(0);
-  const [gameOver, setGameOver] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const resetGame = useCallback(() => {
+    setState(createInitialState());
+  }, []);
 
-  // Game refs (NO re-render per frame)
-  const dino = useRef({ x: 50, y: 140, vy: 0 });
-  const obstacles = useRef<Obstacle[]>([]);
-  const sprites = useRef<{
-    dino?: Sprite;
-    cactus?: Sprite;
-    ground?: Sprite;
-  }>({});
-  const running = useRef(true);
-  const ready = useRef(false);
-  const scoreRef = useRef(0);
-
-  /* =======================
-     Constants
-  ======================= */
-  const GRAVITY = 0.7;
-  const JUMP_FORCE = -13;
-  const GROUND_Y = 160;
-
-  /* =======================
-     Load Sprites
-  ======================= */
-  useEffect(() => {
-    const loadSprite = (src: string): Promise<Sprite> =>
-      new Promise((resolve) => {
-        const img = new Image();
-        img.src = src;
-        img.onload = () =>
-          resolve({ img, width: img.width, height: img.height });
-      });
-
-    Promise.all([
-      loadSprite("/dino/dino.png"),
-      loadSprite("/dino/cactus.png"),
-      loadSprite("/dino/ground.png"),
-    ]).then(([dinoImg, cactusImg, groundImg]) => {
-      sprites.current = {
-        dino: dinoImg,
-        cactus: cactusImg,
-        ground: groundImg,
-      };
-      ready.current = true;
-      setLoading(false);
+  const jump = useCallback(() => {
+    setState((previous) => {
+      if (previous.gameOver || previous.y < GROUND_Y - DINO_HEIGHT - 0.1) {
+        return previous;
+      }
+      return { ...previous, vy: -14 };
     });
   }, []);
 
-  /* =======================
-     Game Loop
-  ======================= */
+  useEffect(() => {
+    if (state.gameOver) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setState((previous) => updateGame(previous));
+    }, 16);
+
+    return () => window.clearInterval(intervalId);
+  }, [state.gameOver]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === " " || event.key === "ArrowUp" || event.key === "w" || event.key === "W") {
+        event.preventDefault();
+        jump();
+      } else if (event.key === "r" || event.key === "R") {
+        event.preventDefault();
+        resetGame();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [jump, resetGame]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    let lastTime = 0;
-
-    const loop = (time: number) => {
-      if (!running.current) return;
-
-      if (!ready.current) {
-        requestAnimationFrame(loop);
-        return;
-      }
-
-      const delta = time - lastTime;
-      lastTime = time;
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Draw ground
-      ctx.drawImage(
-        sprites.current.ground!.img,
-        0,
-        GROUND_Y,
-        canvas.width,
-        20
-      );
-
-      // Dino physics
-      dino.current.vy += GRAVITY;
-      dino.current.y += dino.current.vy;
-
-      if (dino.current.y >= 140) {
-        dino.current.y = 140;
-        dino.current.vy = 0;
-      }
-
-      // Draw dino
-      ctx.drawImage(
-        sprites.current.dino!.img,
-        dino.current.x,
-        dino.current.y,
-        48,
-        48
-      );
-
-      // Spawn obstacles
-      if (Math.random() < 0.015) {
-        obstacles.current.push({ x: canvas.width, y: 140 });
-      }
-
-      // Update obstacles
-      obstacles.current.forEach((obs, i) => {
-        obs.x -= 6;
-
-        ctx.drawImage(
-          sprites.current.cactus!.img,
-          obs.x,
-          obs.y,
-          32,
-          48
-        );
-
-        // Collision detection
-        if (
-          dino.current.x < obs.x + 32 &&
-          dino.current.x + 48 > obs.x &&
-          dino.current.y < obs.y + 48 &&
-          dino.current.y + 48 > obs.y
-        ) {
-          running.current = false;
-          setGameOver(true);
-        }
-
-        // Score
-        if (obs.x < -40) {
-          obstacles.current.splice(i, 1);
-          scoreRef.current++;
-          setScore(scoreRef.current);
-        }
-      });
-
-      requestAnimationFrame(loop);
-    };
-
-    requestAnimationFrame(loop);
-  }, []);
-
-  /* =======================
-     Controls
-  ======================= */
-  const jump = () => {
-    if (dino.current.vy === 0 && running.current) {
-      dino.current.vy = JUMP_FORCE;
+    if (!canvas) {
+      return;
     }
-  };
 
-  const reset = () => {
-    dino.current.y = 140;
-    dino.current.vy = 0;
-    obstacles.current = [];
-    scoreRef.current = 0;
-    setScore(0);
-    setGameOver(false);
-    running.current = true;
-    requestAnimationFrame(() => {});
-  };
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === " " || e.key === "ArrowUp") jump();
-      if (e.key === "r") reset();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    context.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-  /* =======================
-     UI
-  ======================= */
+    const gradient = context.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
+    gradient.addColorStop(0, "rgba(56, 189, 248, 0.15)");
+    gradient.addColorStop(1, "rgba(20, 19, 45, 0.75)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    context.strokeStyle = "rgba(255,255,255,0.18)";
+    context.beginPath();
+    context.moveTo(0, GROUND_Y + 1);
+    context.lineTo(CANVAS_WIDTH, GROUND_Y + 1);
+    context.stroke();
+
+    context.fillStyle = "#fde047";
+    context.fillRect(DINO_X, state.y, DINO_WIDTH, DINO_HEIGHT);
+
+    context.fillStyle = "#fb7185";
+    for (const obstacle of state.obstacles) {
+      context.fillRect(obstacle.x, GROUND_Y - obstacle.height, obstacle.width, obstacle.height);
+    }
+  }, [state]);
+
   return (
-    <div className="flex flex-col items-center gap-4 p-4 select-none">
-      <h1 className="text-3xl font-bold">🦖 Dino Runner</h1>
-
-      {loading && <p className="text-gray-400">Loading assets…</p>}
-
-      <p className="text-lg">Score: {score}</p>
-
+    <GameFrame
+      title="Dino Runner"
+      subtitle="Jump over obstacles and survive as long as possible."
+      status={state.gameOver ? "Crashed" : "Sprinting"}
+      actions={
+        <>
+          <span className="chip">Score {Math.floor(state.score / 6)}</span>
+          <button
+            type="button"
+            onClick={jump}
+            className="focus-ring rounded-full border border-[var(--border-soft)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-primary)]"
+          >
+            Jump
+          </button>
+          <button
+            type="button"
+            onClick={resetGame}
+            className="focus-ring rounded-full border border-[var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-[var(--accent-strong)]"
+          >
+            Restart
+          </button>
+        </>
+      }
+      footer="Controls: Space, Up Arrow, or W to jump. Press R to restart."
+    >
       <canvas
         ref={canvasRef}
-        width={420}
-        height={200}
-        className="border rounded bg-black"
+        width={CANVAS_WIDTH}
+        height={CANVAS_HEIGHT}
+        className="w-full rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-2)]"
         onClick={jump}
         onTouchStart={jump}
       />
-
-      <div className="flex gap-4">
-        <button
-          onClick={jump}
-          className="px-6 py-3 bg-green-600 text-white rounded-lg text-lg"
-        >
-          Jump
-        </button>
-        <button
-          onClick={reset}
-          className="px-6 py-3 bg-gray-700 text-white rounded-lg text-lg"
-        >
-          Restart
-        </button>
-      </div>
-
-      {gameOver && (
-        <p className="text-red-500 font-bold text-xl">
-          Game Over — Press Restart
-        </p>
-      )}
-    </div>
+    </GameFrame>
   );
 }

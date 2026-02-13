@@ -1,138 +1,170 @@
 "use client";
 
-import React, { useEffect, useState, useRef, useCallback } from "react";
-import { initializeBoard, move, addRandomTile, isGameOver, Board } from "./engine";
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import { GameFrame } from "@/components/GameFrame";
+import { Board, addRandomTile, initializeBoard, isGameOver, move } from "./engine";
+
+interface Game2048State {
+  board: Board;
+  score: number;
+  best: number;
+  gameOver: boolean;
+}
+
+const TILE_COLORS: Record<number, string> = {
+  0: "rgba(255,255,255,0.08)",
+  2: "#f8f0db",
+  4: "#f2e2bf",
+  8: "#f5b56b",
+  16: "#f28f52",
+  32: "#f66954",
+  64: "#f14d62",
+  128: "#f2dc63",
+  256: "#f6ca4f",
+  512: "#f7bd36",
+  1024: "#9dd6ff",
+  2048: "#75f0c4",
+};
+
+function createInitialState(previousBest = 0): Game2048State {
+  return {
+    board: initializeBoard(),
+    score: 0,
+    best: previousBest,
+    gameOver: false,
+  };
+}
+
+function tileStyle(value: number): CSSProperties {
+  const tone = TILE_COLORS[value] ?? "#dbeafe";
+  const textColor = value <= 4 ? "#1f2937" : "#ffffff";
+  return { backgroundColor: tone, color: textColor };
+}
 
 export function Game2048() {
-  const [board, setBoard] = useState<Board>(initializeBoard());
-  const [score, setScore] = useState(0);
-  const [gameOver, setGameOver] = useState(false);
-  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
-  const gameRef = useRef<HTMLDivElement>(null);
+  const [state, setState] = useState<Game2048State>(() => createInitialState());
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
 
-  const handleMove = useCallback((direction: string) => {
-    const result = move(board, direction);
-    if (result.moved) {
-      const newBoard = result.board;
-      addRandomTile(newBoard);
-      setBoard(newBoard);
-      setScore(s => s + result.score);
-      if (isGameOver(newBoard)) {
-        setGameOver(true);
+  const resetGame = useCallback(() => {
+    setState((previous) => createInitialState(Math.max(previous.best, previous.score)));
+  }, []);
+
+  const handleMove = useCallback((direction: "left" | "right" | "up" | "down") => {
+    setState((previous) => {
+      if (previous.gameOver) {
+        return previous;
       }
-    }
-  }, [board]);
+
+      const result = move(previous.board, direction);
+      if (!result.moved) {
+        return previous;
+      }
+
+      const nextBoard = result.board.map((row) => [...row]);
+      addRandomTile(nextBoard);
+
+      const score = previous.score + result.score;
+      const best = Math.max(previous.best, score);
+
+      return {
+        board: nextBoard,
+        score,
+        best,
+        gameOver: isGameOver(nextBoard),
+      };
+    });
+  }, []);
 
   useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (gameOver) return;
-      let direction = "";
-      switch (e.key) {
-        case "ArrowLeft":
-          direction = "left";
-          break;
-        case "ArrowRight":
-          direction = "right";
-          break;
-        case "ArrowUp":
-          direction = "up";
-          break;
-        case "ArrowDown":
-          direction = "down";
-          break;
-        case "r":
-        case "R":
-          // eslint-disable-next-line react-hooks/immutability
-          resetGame();
-          return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "r" || event.key === "R") {
+        event.preventDefault();
+        resetGame();
+        return;
       }
-      if (direction) {
-        e.preventDefault();
-        handleMove(direction);
-      }
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [board, gameOver, handleMove]);
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    const touch = e.touches[0];
-    setTouchStart({ x: touch.clientX, y: touch.clientY });
+      const directionMap: Record<string, "left" | "right" | "up" | "down" | undefined> = {
+        ArrowLeft: "left",
+        ArrowRight: "right",
+        ArrowUp: "up",
+        ArrowDown: "down",
+      };
+
+      const direction = directionMap[event.key];
+      if (!direction) {
+        return;
+      }
+
+      event.preventDefault();
+      handleMove(direction);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleMove, resetGame]);
+
+  const onTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    swipeStart.current = { x: touch.clientX, y: touch.clientY };
   };
 
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    if (!touchStart) return;
-    const touch = e.changedTouches[0];
-    const deltaX = touch.clientX - touchStart.x;
-    const deltaY = touch.clientY - touchStart.y;
-    const minSwipeDistance = 50;
-
-    if (Math.abs(deltaX) > Math.abs(deltaY)) {
-      if (Math.abs(deltaX) > minSwipeDistance) {
-        if (deltaX > 0) handleMove("right");
-        else handleMove("left");
-      }
-    } else {
-      if (Math.abs(deltaY) > minSwipeDistance) {
-        if (deltaY > 0) handleMove("down");
-        else handleMove("up");
-      }
+  const onTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (!swipeStart.current) {
+      return;
     }
-    setTouchStart(null);
-  };
 
-  const resetGame = () => {
-    setBoard(initializeBoard());
-    setScore(0);
-    setGameOver(false);
-  };
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - swipeStart.current.x;
+    const deltaY = touch.clientY - swipeStart.current.y;
+    const threshold = 30;
 
-  const getTileColor = (value: number) => {
-    const colors: { [key: number]: string } = {
-      2: "bg-gray-69",
-      4: "bg-gray",
-      8: "bg-orange",
-      16: "bg-orange",
-      32: "bg-red-200",
-      64: "bg-red-35",
-      128: "bg-yellow-200",
-      256: "bg-yellow",
-      512: "bg-green",
-      1024: "bg-blue",
-      2048: "bg-purple",
-    };
-    return colors[value] || "bg-gray-400";
+    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > threshold) {
+      handleMove(deltaX > 0 ? "right" : "left");
+    } else if (Math.abs(deltaY) > threshold) {
+      handleMove(deltaY > 0 ? "down" : "up");
+    }
+
+    swipeStart.current = null;
   };
 
   return (
-    <div
-      ref={gameRef}
-      className="flex flex-col items-center gap-4 p-4"
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
-    >
-      <h1 className="text-2xl font-bold">2048</h1>
-      <p>Score: {score}</p>
-      <div className="grid grid-cols-4 gap-2">
-        {board.flat().map((value, index) => (
-          <div
-            key={index}
-            className={`w-16 h-16 flex items-center justify-center text-lg font-bold border ${getTileColor(value)}`}
+    <GameFrame
+      title="2048"
+      subtitle="Merge equal tiles. Reach 2048 and keep climbing."
+      status={state.gameOver ? "Game Over" : "Running"}
+      actions={
+        <>
+          <span className="chip">Score {state.score}</span>
+          <span className="chip">Best {Math.max(state.best, state.score)}</span>
+          <button
+            type="button"
+            onClick={resetGame}
+            className="focus-ring rounded-full border border-[var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-[var(--accent-strong)]"
           >
-            {value || ""}
-          </div>
-        ))}
-      </div>
-      <p>Use arrow keys or swipe to move. Press R to restart</p>
-      {gameOver && (
-        <div>
-          <p>Game Over!</p>
-          <button onClick={resetGame} className="px-3 py-1 bg-blue-500 text-white rounded">
             New Game
           </button>
+        </>
+      }
+      footer="Controls: Arrow keys or swipe. Press R to restart."
+    >
+      <div
+        className="mx-auto w-full max-w-sm rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-2)] p-3"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      >
+        <div className="grid grid-cols-4 gap-2">
+          {state.board.flat().map((value, index) => (
+            <div
+              key={index}
+              style={tileStyle(value)}
+              className="flex aspect-square items-center justify-center rounded-xl text-xl font-black"
+            >
+              {value === 0 ? "" : value}
+            </div>
+          ))}
         </div>
-      )}
-    </div>
+      </div>
+    </GameFrame>
   );
 }
 

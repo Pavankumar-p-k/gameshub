@@ -1,184 +1,149 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { GameFrame } from "@/components/GameFrame";
 import {
+  BOARD_HEIGHT,
+  BOARD_WIDTH,
+  GameState,
+  Point,
+  changeDirection,
   initializeGame,
   updateGame,
-  changeDirection,
-  GameState,
-  BOARD_WIDTH,
-  BOARD_HEIGHT,
-  Point,
 } from "./engine";
+
+const CELL_SIZE = 14;
 
 export function SnakeGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [gameState, setGameState] = useState<GameState>(initializeGame());
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const [gameState, setGameState] = useState<GameState>(initializeGame);
 
-  /* ==========================
-     Game loop
-  ========================= */
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    let timeoutId: any;
-
-    const loop = () => {
-      setGameState(prev => {
-        const newState = updateGame(prev);
-
-        // Draw
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Draw snake
-        ctx.fillStyle = "green";
-        newState.snake.forEach(seg =>
-          ctx.fillRect(seg.x * 10, seg.y * 10, 10, 10)
-        );
-
-        // Draw food
-        ctx.fillStyle = "red";
-        ctx.fillRect(
-          newState.food.x * 10,
-          newState.food.y * 10,
-          10,
-          10
-        );
-
-        return newState;
-      });
-
-      if (!gameState.gameOver) {
-        timeoutId = setTimeout(loop, gameState.speed);
-      }
-    };
-
-    loop();
-
-    return () => clearTimeout(timeoutId);
-  }, [gameState.gameOver, gameState.speed]);
-
-  /* ==========================
-     Keyboard controls
-  ========================= */
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (gameState.gameOver) return;
-
-      let dir: Point | null = null;
-
-      switch (e.key) {
-        case "ArrowUp":
-        case "w":
-        case "W":
-          dir = { x: 0, y: -1 };
-          break;
-        case "ArrowDown":
-        case "s":
-        case "S":
-          dir = { x: 0, y: 1 };
-          break;
-        case "ArrowLeft":
-        case "a":
-        case "A":
-          dir = { x: -1, y: 0 };
-          break;
-        case "ArrowRight":
-        case "d":
-        case "D":
-          dir = { x: 1, y: 0 };
-          break;
-        case "r":
-        case "R":
-          resetGame();
-          return;
-      }
-
-      if (dir) {
-        e.preventDefault();
-        setGameState(prev => changeDirection(prev, dir!));
-      }
-    };
-
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [gameState.gameOver]);
-
-  /* ==========================
-     Touch / swipe controls
-  ========================= */
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const handleTouchStart = (e: TouchEvent) => {
-      const touch = e.touches[0];
-      touchStartRef.current = { x: touch.clientX, y: touch.clientY };
-    };
-
-    const handleTouchEnd = (e: TouchEvent) => {
-      if (!touchStartRef.current) return;
-
-      const touch = e.changedTouches[0];
-      const dx = touch.clientX - touchStartRef.current.x;
-      const dy = touch.clientY - touchStartRef.current.y;
-
-      const absX = Math.abs(dx);
-      const absY = Math.abs(dy);
-
-      if (Math.max(absX, absY) < 20) return; // minimum swipe distance
-
-      let dir: Point = { x: 0, y: 0 };
-      if (absX > absY) {
-        dir.x = dx > 0 ? 1 : -1;
-      } else {
-        dir.y = dy > 0 ? 1 : -1;
-      }
-
-      setGameState(prev => changeDirection(prev, dir));
-      touchStartRef.current = null;
-    };
-
-    canvas.addEventListener("touchstart", handleTouchStart);
-    canvas.addEventListener("touchend", handleTouchEnd);
-
-    return () => {
-      canvas.removeEventListener("touchstart", handleTouchStart);
-      canvas.removeEventListener("touchend", handleTouchEnd);
-    };
+  const resetGame = useCallback(() => {
+    setGameState(initializeGame());
   }, []);
 
-  const resetGame = () => setGameState(initializeGame());
+  const queueDirection = useCallback((direction: Point) => {
+    setGameState((previous) => changeDirection(previous, direction));
+  }, []);
+
+  useEffect(() => {
+    if (gameState.gameOver) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setGameState((previous) => updateGame(previous));
+    }, gameState.speed);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [gameState]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "ArrowUp" || event.key === "w" || event.key === "W") {
+        event.preventDefault();
+        queueDirection({ x: 0, y: -1 });
+      } else if (event.key === "ArrowDown" || event.key === "s" || event.key === "S") {
+        event.preventDefault();
+        queueDirection({ x: 0, y: 1 });
+      } else if (event.key === "ArrowLeft" || event.key === "a" || event.key === "A") {
+        event.preventDefault();
+        queueDirection({ x: -1, y: 0 });
+      } else if (event.key === "ArrowRight" || event.key === "d" || event.key === "D") {
+        event.preventDefault();
+        queueDirection({ x: 1, y: 0 });
+      } else if (event.key === "r" || event.key === "R") {
+        event.preventDefault();
+        resetGame();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [queueDirection, resetGame]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+
+    const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, "rgba(13, 148, 136, 0.2)");
+    gradient.addColorStop(1, "rgba(8, 47, 73, 0.65)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    context.fillStyle = "#22c55e";
+    for (const segment of gameState.snake) {
+      context.fillRect(segment.x * CELL_SIZE, segment.y * CELL_SIZE, CELL_SIZE - 1, CELL_SIZE - 1);
+    }
+
+    context.fillStyle = "#f97316";
+    context.fillRect(gameState.food.x * CELL_SIZE, gameState.food.y * CELL_SIZE, CELL_SIZE - 1, CELL_SIZE - 1);
+  }, [gameState]);
+
+  const onTouchStart = (event: React.TouchEvent<HTMLCanvasElement>) => {
+    const touch = event.touches[0];
+    touchStart.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const onTouchEnd = (event: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!touchStart.current) {
+      return;
+    }
+
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - touchStart.current.x;
+    const dy = touch.clientY - touchStart.current.y;
+    const threshold = 24;
+
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > threshold) {
+      queueDirection({ x: dx > 0 ? 1 : -1, y: 0 });
+    } else if (Math.abs(dy) > threshold) {
+      queueDirection({ x: 0, y: dy > 0 ? 1 : -1 });
+    }
+
+    touchStart.current = null;
+  };
 
   return (
-    <div className="flex flex-col items-center gap-4 p-4">
-      <h1 className="text-2xl font-bold">Snake</h1>
-      <p>Score: {gameState.score}</p>
-      <canvas
-        ref={canvasRef}
-        width={BOARD_WIDTH * 10}
-        height={BOARD_HEIGHT * 10}
-        className="border touch-none"
-      />
-      {gameState.gameOver && (
-        <div>
-          <p>Game Over!</p>
+    <GameFrame
+      title="Snake"
+      subtitle="Eat food, grow longer, and avoid crashing."
+      status={gameState.gameOver ? "Game Over" : "Alive"}
+      actions={
+        <>
+          <span className="chip">Score {gameState.score}</span>
+          <span className="chip">Speed {Math.max(1, Math.round((220 - gameState.speed) / 10))}</span>
           <button
+            type="button"
             onClick={resetGame}
-            className="px-3 py-1 bg-blue-500 text-white rounded"
+            className="focus-ring rounded-full border border-[var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-[var(--accent-strong)]"
           >
             Restart
           </button>
-        </div>
-      )}
-      <p className="text-sm text-gray-500">
-        Use arrow keys / WASD on desktop or swipe on mobile
-      </p>
-    </div>
+        </>
+      }
+      footer="Controls: Arrow keys or WASD. Swipe on touch devices. Press R to restart."
+    >
+      <canvas
+        ref={canvasRef}
+        width={BOARD_WIDTH * CELL_SIZE}
+        height={BOARD_HEIGHT * CELL_SIZE}
+        className="mx-auto w-full max-w-[560px] rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-2)]"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      />
+    </GameFrame>
   );
 }
 
