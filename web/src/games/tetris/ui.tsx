@@ -211,41 +211,324 @@ function hardDrop(state: TetrisState): TetrisState {
   return lockPiece({ ...state, position: { ...state.position, y } });
 }
 
+// ─── colour helpers ──────────────────────────────────────────────────────────
+
+/** Parse a 6-digit hex colour into {r,g,b} (0-255 each). */
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const clean = hex.replace("#", "");
+  return {
+    r: parseInt(clean.slice(0, 2), 16),
+    g: parseInt(clean.slice(2, 4), 16),
+    b: parseInt(clean.slice(4, 6), 16),
+  };
+}
+
+/** Lighten or darken a hex colour by `amount` (positive = lighter, negative = darker). */
+function adjustColor(hex: string, amount: number): string {
+  const { r, g, b } = hexToRgb(hex);
+  const clamp = (v: number) => Math.min(255, Math.max(0, Math.round(v)));
+  const rr = clamp(r + amount).toString(16).padStart(2, "0");
+  const gg = clamp(g + amount).toString(16).padStart(2, "0");
+  const bb = clamp(b + amount).toString(16).padStart(2, "0");
+  return `#${rr}${gg}${bb}`;
+}
+
+function rgbaFromHex(hex: string, alpha: number): string {
+  const { r, g, b } = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ─── 3-D block drawing ───────────────────────────────────────────────────────
+
+/**
+ * Draw a single 3-D beveled block whose top-left canvas corner is (px, py).
+ *
+ * Face layout (top-down isometric-ish, all in 2-D canvas space):
+ *
+ *   ┌──────────────────────────────── top face ──┐
+ *   │  (0,bevel)──────────────────(S,bevel)       │
+ *   │   /                                  \      │
+ *   │  (0,0) ────────────────────(S,0)            │
+ *   └────────────────────────────────────────────┘
+ *
+ * We use a simpler but effective approach: three parallelogram/trapezoid faces
+ * within the square cell, using a fixed bevel depth.
+ *
+ *  Bevel = CELL_SIZE * 0.18  (the "depth" of the 3-D illusion)
+ *
+ *  Top-face   : (bv,0) → (S-bv,0) → (S,bv) → (0,bv)   [lighter]
+ *  Left-face  : (0,bv) → (bv,0)   → (bv,S-bv) → (0,S)  [medium/base]  -- actually left side
+ *  Right-face : (S-bv,0)→(S,bv) → (S,S) → (S-bv,S-bv)  [darker]
+ *  Front-face : (bv,bv) → (S-bv,bv) → (S-bv,S-bv) → (bv,S-bv)  --- wait, simpler:
+ *
+ * Cleaner scheme (standard beveled square):
+ *   top    quad : (0,0)  (S,0)  (S-bv,bv)  (bv,bv)         ← top strip
+ *   left   quad : (0,0)  (bv,bv) (bv,S-bv) (0,S)           ← left strip
+ *   right  quad : (S,0)  (S-bv,bv) (S-bv,S-bv) (S,S)       ← right strip
+ *   bottom quad : (0,S)  (bv,S-bv) (S-bv,S-bv) (S,S)       ← bottom strip
+ *   centre rect : (bv,bv) → (S-bv,S-bv)                    ← main face
+ */
+function draw3DBlock(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  color: string,
+  alpha = 1
+) {
+  const S = CELL_SIZE;
+  const bv = Math.round(S * 0.18); // bevel depth
+
+  // Face colours
+  const top    = adjustColor(color, +75);   // very light
+  const left   = adjustColor(color, +25);   // slightly light
+  const centre = color;                      // base
+  const right  = adjustColor(color, -55);   // darker
+  const bottom = adjustColor(color, -80);   // darkest
+
+  const drawFace = (points: [number, number][], fill: string) => {
+    ctx.beginPath();
+    ctx.moveTo(px + points[0][0], py + points[0][1]);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(px + points[i][0], py + points[i][1]);
+    }
+    ctx.closePath();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = fill;
+    ctx.fill();
+  };
+
+  // Top bevel strip
+  drawFace([[0, 0], [S, 0], [S - bv, bv], [bv, bv]], top);
+  // Left bevel strip
+  drawFace([[0, 0], [bv, bv], [bv, S - bv], [0, S]], left);
+  // Right bevel strip
+  drawFace([[S, 0], [S - bv, bv], [S - bv, S - bv], [S, S]], right);
+  // Bottom bevel strip
+  drawFace([[0, S], [bv, S - bv], [S - bv, S - bv], [S, S]], bottom);
+  // Centre face
+  drawFace([[bv, bv], [S - bv, bv], [S - bv, S - bv], [bv, S - bv]], centre);
+
+  // Inner shine on centre face (top-left diagonal glint)
+  ctx.globalAlpha = alpha * 0.35;
+  const shineGrad = ctx.createLinearGradient(px + bv, py + bv, px + S - bv, py + S - bv);
+  shineGrad.addColorStop(0, "rgba(255,255,255,0.55)");
+  shineGrad.addColorStop(0.45, "rgba(255,255,255,0.0)");
+  ctx.fillStyle = shineGrad;
+  ctx.beginPath();
+  ctx.moveTo(px + bv, py + bv);
+  ctx.lineTo(px + S - bv, py + bv);
+  ctx.lineTo(px + S - bv, py + S - bv);
+  ctx.lineTo(px + bv, py + S - bv);
+  ctx.closePath();
+  ctx.fill();
+
+  // Thin highlight on top bevel strip
+  ctx.globalAlpha = alpha * 0.7;
+  ctx.strokeStyle = "rgba(255,255,255,0.6)";
+  ctx.lineWidth = 0.75;
+  ctx.beginPath();
+  ctx.moveTo(px + 1, py + 1);
+  ctx.lineTo(px + S - 1, py + 1);
+  ctx.stroke();
+
+  ctx.globalAlpha = 1;
+}
+
+// ─── ghost piece helper ───────────────────────────────────────────────────────
+
+function getGhostPosition(state: TetrisState): Position {
+  let y = state.position.y;
+  while (!hasCollision(state.board, state.piece, { x: state.position.x, y: y + 1 })) {
+    y += 1;
+  }
+  return { x: state.position.x, y };
+}
+
+// ─── main draw function ───────────────────────────────────────────────────────
+
 function drawState(context: CanvasRenderingContext2D, state: TetrisState) {
-  context.clearRect(0, 0, BOARD_WIDTH * CELL_SIZE, BOARD_HEIGHT * CELL_SIZE);
+  const W = BOARD_WIDTH * CELL_SIZE;
+  const H = BOARD_HEIGHT * CELL_SIZE;
+  const S = CELL_SIZE;
 
-  const gradient = context.createLinearGradient(0, 0, 0, BOARD_HEIGHT * CELL_SIZE);
-  gradient.addColorStop(0, "rgba(59, 130, 246, 0.18)");
-  gradient.addColorStop(1, "rgba(17, 24, 39, 0.85)");
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, BOARD_WIDTH * CELL_SIZE, BOARD_HEIGHT * CELL_SIZE);
+  // ── board background ──────────────────────────────────────────────────────
+  context.clearRect(0, 0, W, H);
 
+  // Dark stone/glass base gradient
+  const bgGrad = context.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, "#0d1117");
+  bgGrad.addColorStop(0.5, "#111827");
+  bgGrad.addColorStop(1, "#0a0f1a");
+  context.fillStyle = bgGrad;
+  context.fillRect(0, 0, W, H);
+
+  // Very faint grid lines (stone-tile effect)
+  context.lineWidth = 0.5;
+  context.strokeStyle = "rgba(148, 163, 184, 0.07)";
+  for (let col = 0; col <= BOARD_WIDTH; col++) {
+    context.beginPath();
+    context.moveTo(col * S, 0);
+    context.lineTo(col * S, H);
+    context.stroke();
+  }
+  for (let row = 0; row <= BOARD_HEIGHT; row++) {
+    context.beginPath();
+    context.moveTo(0, row * S);
+    context.lineTo(W, row * S);
+    context.stroke();
+  }
+
+  // Subtle inner vignette
+  const vignette = context.createRadialGradient(W / 2, H / 2, H * 0.2, W / 2, H / 2, H * 0.85);
+  vignette.addColorStop(0, "rgba(0,0,0,0)");
+  vignette.addColorStop(1, "rgba(0,0,0,0.45)");
+  context.fillStyle = vignette;
+  context.fillRect(0, 0, W, H);
+
+  // ── locked board cells ────────────────────────────────────────────────────
   state.board.forEach((row, y) => {
     row.forEach((cell, x) => {
-      if (!cell) {
-        context.strokeStyle = "rgba(148, 163, 184, 0.1)";
-        context.strokeRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-        return;
+      if (cell) {
+        draw3DBlock(context, x * S, y * S, cell);
       }
-      context.fillStyle = cell;
-      context.fillRect(x * CELL_SIZE + 1, y * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
     });
   });
 
-  state.piece.shape.forEach((row, y) => {
-    row.forEach((cell, x) => {
-      if (!cell) {
-        return;
-      }
-      context.fillStyle = state.piece.color;
-      context.fillRect(
-        (state.position.x + x) * CELL_SIZE + 1,
-        (state.position.y + y) * CELL_SIZE + 1,
-        CELL_SIZE - 2,
-        CELL_SIZE - 2
-      );
+  // ── ghost piece ───────────────────────────────────────────────────────────
+  if (!state.gameOver) {
+    const ghost = getGhostPosition(state);
+    // Only draw ghost if it differs from current position
+    if (ghost.y !== state.position.y) {
+      const { r, g, b } = hexToRgb(state.piece.color);
+      state.piece.shape.forEach((row, dy) => {
+        row.forEach((cell, dx) => {
+          if (!cell) return;
+          const px = (ghost.x + dx) * S;
+          const py = (ghost.y + dy) * S;
+          const bv = Math.round(S * 0.18);
+
+          // Ghost: just an outline of the cube faces, no fill
+          context.globalAlpha = 0.55;
+          context.strokeStyle = `rgba(${r},${g},${b},0.9)`;
+          context.lineWidth = 1;
+
+          // Outer border
+          context.beginPath();
+          context.moveTo(px + 1, py + 1);
+          context.lineTo(px + S - 1, py + 1);
+          context.lineTo(px + S - 1, py + S - 1);
+          context.lineTo(px + 1, py + S - 1);
+          context.closePath();
+          context.stroke();
+
+          // Bevel corner lines to suggest 3-D depth
+          context.globalAlpha = 0.35;
+          context.strokeStyle = `rgba(${r},${g},${b},0.7)`;
+          context.lineWidth = 0.75;
+
+          // Top bevel line
+          context.beginPath();
+          context.moveTo(px + bv, py + bv);
+          context.lineTo(px + S - bv, py + bv);
+          context.stroke();
+          // Left bevel line
+          context.beginPath();
+          context.moveTo(px + bv, py + bv);
+          context.lineTo(px + bv, py + S - bv);
+          context.stroke();
+
+          context.globalAlpha = 1;
+        });
+      });
+    }
+  }
+
+  // ── active falling piece with glow ────────────────────────────────────────
+  if (!state.gameOver) {
+    const { r, g, b } = hexToRgb(state.piece.color);
+
+    // Glow / aura: soft shadow around the piece
+    context.save();
+    context.shadowColor = `rgba(${r},${g},${b},0.85)`;
+    context.shadowBlur = 18;
+
+    state.piece.shape.forEach((row, dy) => {
+      row.forEach((cell, dx) => {
+        if (!cell) return;
+        const px = (state.position.x + dx) * S;
+        const py = (state.position.y + dy) * S;
+
+        // Draw a faint glow rect first (so the shadow registers)
+        context.globalAlpha = 0.01;
+        context.fillStyle = `rgba(${r},${g},${b},1)`;
+        context.fillRect(px, py, S, S);
+        context.globalAlpha = 1;
+      });
     });
-  });
+
+    context.restore();
+
+    // Now draw the actual 3-D blocks on top of the glow
+    state.piece.shape.forEach((row, dy) => {
+      row.forEach((cell, dx) => {
+        if (!cell) return;
+        const px = (state.position.x + dx) * S;
+        const py = (state.position.y + dy) * S;
+        draw3DBlock(context, px, py, state.piece.color);
+      });
+    });
+  }
+
+  // ── GAME OVER overlay ─────────────────────────────────────────────────────
+  if (state.gameOver) {
+    // Dark translucent veil
+    context.globalAlpha = 0.72;
+    context.fillStyle = "#000000";
+    context.fillRect(0, 0, W, H);
+    context.globalAlpha = 1;
+
+    // Vivid red-to-orange gradient title
+    const titleGrad = context.createLinearGradient(W / 2 - 80, 0, W / 2 + 80, 0);
+    titleGrad.addColorStop(0, "#ff4444");
+    titleGrad.addColorStop(0.5, "#ff8800");
+    titleGrad.addColorStop(1, "#ff4444");
+
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+
+    // Outer glow for the title
+    context.save();
+    context.shadowColor = "rgba(255,80,0,0.9)";
+    context.shadowBlur = 28;
+
+    context.font = `bold ${Math.round(S * 1.35)}px 'Segoe UI', system-ui, sans-serif`;
+    context.fillStyle = titleGrad;
+    context.fillText("GAME", W / 2, H / 2 - S * 1.1);
+    context.fillText("OVER", W / 2, H / 2 + S * 0.1);
+
+    context.restore();
+
+    // Subtitle
+    context.globalAlpha = 0.75;
+    context.font = `${Math.round(S * 0.5)}px 'Segoe UI', system-ui, sans-serif`;
+    context.fillStyle = "#e2e8f0";
+    context.fillText("Press R to restart", W / 2, H / 2 + S * 1.55);
+    context.globalAlpha = 1;
+
+    // Thin decorative lines above/below text
+    const lineY1 = H / 2 - S * 1.9;
+    const lineY2 = H / 2 + S * 2.1;
+    context.strokeStyle = "rgba(255,120,0,0.55)";
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(W * 0.1, lineY1);
+    context.lineTo(W * 0.9, lineY1);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(W * 0.1, lineY2);
+    context.lineTo(W * 0.9, lineY2);
+    context.stroke();
+  }
 }
 
 export function TetrisGame() {
@@ -328,6 +611,8 @@ export function TetrisGame() {
           </button>
         </>
       }
+      score={state.score}
+      gameOver={state.gameOver}
       footer="Controls: Arrows or WASD. Space = hard drop. R = restart."
     >
       <div className="mx-auto w-full max-w-[320px]">

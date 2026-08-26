@@ -183,6 +183,8 @@ export function WordleGame() {
           </button>
         </>
       }
+      score={won ? Math.max(1, (6 - guesses.length + 1) * 100) : 0}
+      gameOver={gameOver}
       footer="Controls: Type letters, Enter to submit, Backspace to edit, R to restart."
     >
       <div className="mx-auto flex w-full max-w-md flex-col items-center gap-4">

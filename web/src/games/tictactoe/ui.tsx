@@ -104,6 +104,8 @@ export function TicTacToeGame() {
           </button>
         </>
       }
+      score={outcome === "X" ? 100 : outcome === "O" ? 50 : 0}
+      gameOver={outcome !== null && outcome !== "X" && outcome !== "O" ? true : outcome !== null}
       footer="Controls: Click a tile or press 1-9. Press R to reset."
     >
       <div className="mx-auto grid w-full max-w-sm grid-cols-3 gap-2">

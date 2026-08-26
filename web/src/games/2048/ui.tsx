@@ -145,6 +145,8 @@ export function Game2048() {
           </button>
         </>
       }
+      score={state.score}
+      gameOver={state.gameOver}
       footer="Controls: Arrow keys or swipe. Press R to restart."
     >
       <div

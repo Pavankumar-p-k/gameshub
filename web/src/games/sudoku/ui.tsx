@@ -219,6 +219,8 @@ export default function SudokuUI() {
           </button>
         </>
       }
+      score={state.won ? 500 : 0}
+      gameOver={state.won}
       footer="Controls: Click cell, type 1-9, Backspace/Delete to clear, arrows to move, R to restart."
     >
       <div className="grid gap-5 xl:grid-cols-[1fr_280px]">

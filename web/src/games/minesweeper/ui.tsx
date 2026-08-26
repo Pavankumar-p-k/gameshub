@@ -216,6 +216,8 @@ export function MinesweeperGame() {
           </button>
         </>
       }
+      score={state.board.flat().filter((c) => c.isRevealed && !c.isMine).length}
+      gameOver={state.gameOver}
       footer="Controls: Left click/tap to reveal. Right click to flag. Press R to restart."
     >
       <div className="mx-auto w-full max-w-[520px]">
