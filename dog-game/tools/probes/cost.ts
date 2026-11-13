@@ -1,0 +1,69 @@
+// What a part of the scene costs on the GPU, in one page: `?cost=` names objects of the scene (default `grass`), or
+// `taa` / `rays` (the demo's TAA and god rays: their `enabled`), each switched off and on in alternating blocks of
+// `?costframes=` (40) frames, 6 of each, the median GPU ms of each state (render + compute timer queries; the WebGL
+// mode's too). Back-to-back runs of the same build swung ~2x on the dev GPU (WebGL ground 7 or 13 ms), so separate
+// harness variants can't measure a few ms: alternating blocks in one page can. `name@other` measures a material
+// instead: the mesh `name` with its own material ("on") against `other`'s ("off"), the same geometry and depth
+// (`terrain@terrain-high`: the forest floor's shader over the plain ground's; the terrain's visibility is set every
+// frame by its altitude, so it can't be switched off). A dotted name is a boolean property of an object of the demo
+// (`forest.leafPrepass.mode`, with ?leafpre=1: the leaves' depth prepass) or a uniform's 0 / 1 (`forest.u.sw.value`); `a;b` switches objects together. `impmin=2/4`: the
+// impostors' narrowest width at 2 ("off") and 4 ("on"), with the impostors listed in each. `grassshare=1/0.33`: the grass's share of
+// its blades, likewise. `path=lo/hi`: any number of the demo, `reliefSteps.value=0/32` (the floor's parallax steps).
+import type { Demo } from '../../src/harness-api.ts';
+import type * as THREE from 'three/webgpu';
+
+async (demo: Demo) => {
+  const q = new URLSearchParams(location.search);
+  const names = (q.get('cost') ?? 'grass').split(',');
+  const frames = Number(q.get('costframes') ?? 40);
+  const r = demo.renderer;
+  const gpu = async (): Promise<number> => ((await r.resolveTimestampsAsync('render')) ?? 0) + ((demo.webgl ? 0 : await r.resolveTimestampsAsync('compute')) ?? 0);
+  const median = (a: number[]): number => +[...a].sort((x, y) => x - y)[a.length >> 1].toFixed(2);
+  const out: Record<string, unknown> = {};
+  for (const name of names) {
+    let toggle: { get visible(): boolean; set visible(v: boolean) } | undefined;
+    const [own, other] = name.split('@');
+    if (name.startsWith('impmin=')) {
+      const [lo, hi] = name.slice(7).split('/').map(Number), mp = demo.impMinPx;
+      toggle = { get visible() { return mp.value === hi; }, set visible(v: boolean) { mp.value = v ? hi : lo; } };
+    } else if (name.startsWith('grassshare=')) {
+      const [lo, hi] = name.slice(11).split('/').map(Number);
+      toggle = { get visible() { return demo.grassShare.value === hi; }, set visible(v: boolean) { demo.grassShare.value = demo.grassThin.target = v ? hi : lo; } };
+    } else if (/^[\w.]+=[\d.]+\/[\d.]+$/.test(name)) {
+      // (`reliefSteps.value=0/32`: a number of the demo at lo ("off") and hi ("on"))
+      const [path, range] = name.split('='), [lo, hi] = range.split('/').map(Number), keys = path.split('.'), key = keys.pop()!;
+      const owner = keys.reduce<Record<string, unknown> | undefined>((o, k) => o?.[k] as Record<string, unknown> | undefined, demo as unknown as Record<string, unknown>);
+      if (owner && typeof owner[key] === 'number') toggle = { get visible() { return owner[key] === hi; }, set visible(v: boolean) { owner[key] = v ? hi : lo; } };
+    } else if (name.includes(';')) {
+      // (objects switched together: `nanite-leaves-main-pre;nanite-leaves-main-after`, a draw and its prepass)
+      const objs = name.split(';').map((n) => demo.scene.getObjectByName(n));
+      if (objs.every(Boolean)) toggle = { get visible() { return objs[0]!.visible; }, set visible(v: boolean) { objs.forEach((o) => (o!.visible = v)); } };
+    } else if (other !== undefined) {
+      const mesh = demo.scene.getObjectByName(own) as THREE.Mesh | undefined, alt = demo.scene.getObjectByName(other) as THREE.Mesh | undefined;
+      if (mesh && alt) {
+        const mine = mesh.material;
+        toggle = { get visible() { return mesh.material === mine; }, set visible(v: boolean) { mesh.material = v ? mine : alt.material; } };
+      }
+    } else {
+      // (a dotted path: a boolean property of an object of the demo, `forest.leafPrepass.mode` with ?leafpre=1)
+      const path = name.split('.'), key = path.pop()!;
+      const owner = path.length ? path.reduce<Record<string, unknown> | undefined>((o, k) => o?.[k] as Record<string, unknown> | undefined, demo as unknown as Record<string, unknown>) : undefined;
+      const sw = demo[name] as { enabled?: boolean } | undefined; // (taa, rays)
+      toggle = owner && typeof owner[key] === 'number' ? { get visible() { return owner[key] === 1; }, set visible(v: boolean) { owner[key] = v ? 1 : 0; } } : owner && typeof owner[key] === 'boolean' ? { get visible() { return owner[key] as boolean; }, set visible(v: boolean) { owner[key] = v; } } : sw && typeof sw.enabled === 'boolean' ? { get visible() { return sw.enabled!; }, set visible(v: boolean) { sw.enabled = v; } } : demo.scene.getObjectByName(name);
+    }
+    if (!toggle) { out[name] = 'not in the scene'; continue; }
+    const was = toggle.visible, on: number[] = [], off: number[] = [];
+    for (let round = 0; round < 12; round++) {
+      const shown = round % 2 === 1;
+      toggle.visible = shown;
+      for (let i = 0; i < frames; i++) {
+        await demo.renderFrame();
+        const ms = await gpu();
+        if (i >= 5) (shown ? on : off).push(ms); // (the first frames after a switch settle)
+      }
+    }
+    toggle.visible = was;
+    out[name] = { on: median(on), off: median(off), cost: +(median(on) - median(off)).toFixed(2) };
+  }
+  return out;
+}

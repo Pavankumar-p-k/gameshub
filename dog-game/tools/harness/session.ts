@@ -1,0 +1,153 @@
+// One booted demo page: loading it with a query, and benchmarking / picturing / probing each view.
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { stripTypeScriptTypes } from 'node:module';
+import { VIEWS } from './views.ts';
+import { meanColour, diffPixels } from './images.ts';
+import { at } from './status.ts';
+import type { Page } from 'playwright-core';
+import type { Options } from './options.ts';
+import type { Demo, HarnessView } from '../../src/harness-api.ts';
+
+/** One view's numbers: the page's benchmark, plus what the harness adds. */
+export type ViewResult = Awaited<ReturnType<Demo['bench']>> & {
+  secs?: string;
+  probes?: Record<string, unknown>;
+  flickerPx?: number;
+  colour?: ReturnType<typeof meanColour>;
+};
+
+/** Loads the demo with this query (on top of ?harness=1) and waits until it's ready. */
+export async function boot(page: Page, url: string, query: string, opts: Options, outDir: string) {
+  // (120 s: the dev server's first load after edits can take over the default 30 s)
+  await page.goto(`${url}?harness=1${query ? '&' + query : ''}`, { timeout: 120000 });
+  if (opts.resizeDuringLoad) {
+    // a fullscreen toggle while the demo is still loading
+    const [width, height] = opts.resizeDuringLoad;
+    await new Promise((r) => setTimeout(r, 1500));
+    await page.setViewportSize({ width, height });
+  }
+  if (opts.choose) await choose(page, opts.choose, outDir);
+  if (opts.loadingShots) {
+    for (let i = 0; i < 12 && !(await page.evaluate(() => window.__demo?.ready || window.__demo?.error)); i++) {
+      await page.screenshot({ path: join(outDir, `loading-${i}.png`) });
+      await new Promise((r) => setTimeout(r, 600));
+    }
+  }
+  await page.waitForFunction(() => window.__demo?.ready || window.__demo?.error, null, { timeout: 300000, polling: 250 });
+  const err = await page.evaluate(() => window.__demo.error);
+  if (err) throw new Error('page failed to start: ' + err);
+  if (opts.choose) {
+    const want = opts.choose === 'wait' || opts.choose === 'hover' ? 'forest' : opts.choose, got = await page.evaluate(() => window.__demo.sceneName);
+    if (got !== want) throw new Error(`scene choice: wanted ${want}, got ${got}`);
+    console.log(`scene choice: ${got} (${opts.choose === 'wait' || opts.choose === 'hover' ? 'after the countdown' : 'clicked'})`);
+  }
+  return page.evaluate(() => window.__demo.info());
+}
+
+/** The loading screen's scene choice (src/scene.ts): a screenshot, then a click on `pick`'s button, or the countdown ('wait'). */
+async function choose(page: Page, pick: string, outDir: string): Promise<void> {
+  at('scene choice');
+  const choice = page.locator('[data-scene-choice]');
+  await choice.waitFor({ state: 'visible', timeout: 60000 });
+  await new Promise((r) => setTimeout(r, 1200)); // (into the countdown: its bar part drained)
+  await page.screenshot({ path: join(outDir, 'choice.png') });
+  if (pick === 'hover') {
+    // the pointer moving over a button holds the countdown, which goes on 3 s after it stops (src/scene.ts)
+    const box = (await page.locator('[data-scene-choice] button[data-scene="lucy"]').boundingBox())!;
+    for (let i = 0; i < 35; i++) {
+      await page.mouse.move(box.x + box.width * (0.3 + 0.4 * (i % 2)), box.y + box.height / 2);
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const text = await page.locator('[data-scene-countdown]').textContent();
+    if (!(await choice.isVisible()) || !text?.includes('paused')) throw new Error(`--choose=hover: after 7 s of moving the countdown read "${text}", visible ${await choice.isVisible()}`);
+    const t0 = Date.now();
+    await choice.waitFor({ state: 'hidden', timeout: 9000 });
+    console.log(`hover: held 7 s ("${text}"), the forest ${((Date.now() - t0) / 1000).toFixed(1)} s after the pointer stopped`);
+    return;
+  }
+  if (pick !== 'wait') await page.locator(`[data-scene-choice] button[data-scene="${pick}"]`).click();
+  await choice.waitFor({ state: 'hidden', timeout: pick === 'wait' ? 10000 : 2000 });
+}
+
+/**
+ * A probe's source: tools/probes/<name>.ts holds one expression, `async (demo, view) => result`, typed (type-checked
+ * with the tools); its types are stripped here, so the page evaluates plain JavaScript.
+ */
+function probeSource(root: string, name: string): string {
+  return stripTypeScriptTypes(readFileSync(join(root, 'tools', 'probes', `${name}.ts`), 'utf8'));
+}
+
+const COLUMNS: [string, number, (n: string, r: ViewResult) => string | number][] = [
+  ['view', 12, (n) => n],
+  ['frame', 7, (n, r) => r.frameMs.toFixed(2)],
+  ['gpu', 7, (n, r) => r.gpuRenderMs.toFixed(2)],
+  ['cull', 7, (n, r) => r.gpuComputeMs.toFixed(2)],
+  ['cpu', 7, (n, r) => r.cpuMs.toFixed(2)],
+  ['clusters', 9, (n, r) => r.clusters],
+  ['tris', 10, (n, r) => r.tris],
+  ['swTris', 10, (n, r) => r.swTris ?? ''], // triangles in software-rasterized clusters (src/nanite-lib/gpu/softraster.ts)
+  ['trees', 6, (n, r) => r.instances ?? ''],
+  ['shadowTris', 11, (n, r) => r.shadowTris ?? ''],
+  ['imposts', 8, (n, r) => r.impostors ?? ''],
+  ['splats', 8, (n, r) => r.splats ?? ''], // impostors splatted in compute (src/nanite-lib/gpu/splats.ts)
+  ['occluded', 8, (n, r) => r.occluded ?? ''], // trees drawn neither way: hidden behind nearer ones
+  ['occImp', 7, (n, r) => r.occludedImpostors ?? ''], // impostors dropped the same way
+  ['secs', 5, (n, r) => r.secs ?? ''], // wall time of the benchmark (the harness's own cost)
+];
+const row = (cells: (string | number)[]): string => cells.map((c, i) => (i === 0 ? String(c).padEnd(COLUMNS[i][1]) : String(c).padStart(COLUMNS[i][1]))).join(' ');
+
+/**
+ * Every view: benchmark (numbers printed as a table), probes, the still-frame check and a screenshot. `tag` is
+ * added to the file names (A/B variants: "@0", "@1", ...). Returns { view: result }.
+ */
+export async function runViews(page: Page, opts: Options, { root, outDir, tag = '' }: { root: string; outDir: string; tag?: string }) {
+  const results: Record<string, ViewResult> = {};
+  console.log('\n' + row(COLUMNS.map((c) => c[0])));
+  for (const name of opts.views) {
+    const view = { ...VIEWS[name], zoom: opts.zoom ?? VIEWS[name].zoom ?? 1 };
+    await page.evaluate((v) => window.__demo.setView(v), view);
+    at(`view ${name}: benchmark`);
+    const t0 = Date.now();
+    const r: ViewResult = await page.evaluate((n) => window.__demo.bench(n), opts.frames);
+    r.secs = ((Date.now() - t0) / 1000).toFixed(1);
+    results[name] = r;
+    console.log(row(COLUMNS.map(([, , f]) => f(name, r))));
+
+    for (const probe of opts.probes) {
+      at(`view ${name}: probe ${probe}`);
+      const args: [string, HarnessView] = [probeSource(root, probe), view];
+      const res = (await page.evaluate(async ([src, v]) => await (0, eval)(src)(window.__demo, v), args)) as Record<string, unknown> | null;
+      if (res && typeof res.png === 'string') {
+        writeFileSync(join(outDir, `${probe}-${name}${tag}.png`), Buffer.from(res.png.split(',')[1], 'base64'));
+        delete res.png;
+      }
+      (r.probes ??= {})[probe] = res;
+      console.log(`${''.padEnd(12)} ${probe}: ${JSON.stringify(res)}`);
+    }
+
+    if (opts.flicker) {
+      // a still camera (run with wind=0) must give identical frames; anything else is nondeterminism
+      const shots: Buffer[] = [];
+      for (let i = 0; i < 3; i++) {
+        await page.evaluate(() => window.__demo.renderOnce());
+        shots.push(await page.screenshot({ clip: { x: 0, y: 150, width: opts.width, height: opts.height - 150 } }));
+      }
+      const same = shots.every((b) => b.equals(shots[0]));
+      const px = same ? 0 : Math.max(...shots.slice(1).map((b) => diffPixels(shots[0], b)));
+      r.flickerPx = px;
+      console.log(`${''.padEnd(12)} flicker check: ${same ? 'frames identical' : `FRAMES DIFFER (${px} px)`}`);
+      if (!same) shots.forEach((b, i) => writeFileSync(join(outDir, `${name}${tag}-flicker-${i}.png`), b));
+    }
+
+    if (opts.shots) {
+      at(`view ${name}: screenshot`);
+      await page.evaluate((rr) => window.__demo.renderOnce(rr), r); // (the HUD then shows the benchmark's numbers)
+      const shot = await page.screenshot();
+      writeFileSync(join(outDir, `${name}${tag}.png`), shot);
+      const colour = (r.colour = meanColour(shot));
+      if (tag) console.log(`${''.padEnd(12)} colour all ${colour.all.join(',')}  trees ${colour.trees.join(',')}  tree share ${colour.treeShare}`);
+    }
+  }
+  return results;
+}

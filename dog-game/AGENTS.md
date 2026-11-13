@@ -1,0 +1,971 @@
+# AGENTS.md
+
+Guide for coding agents working on **Nanite Forest**, a three.js WebGPU tech demo: a 1M-tree forest (ez-tree) drawn
+with a Nanite-style GPU-driven cluster LOD system. `README.md` is the overview and controls; this file covers the
+things that aren't obvious from the code.
+
+## Commands
+
+```bash
+npm install
+npm run dev        # Vite dev server
+npm run build      # type-check (tsc, strict) + production build into dist/ (relative base: works under the Pages subpath)
+npm run typecheck  # tsc only
+npm run harness    # headless benchmark + screenshots, see below
+```
+
+## Workflow
+
+- **Pull requests with live previews** (the user's, since 2026-10-12): work on a branch, open a PR to `main`. Each
+  push to a PR builds a preview at https://victorzakharov.github.io/threejs-nanites/pr-preview/pr-N/ (a sticky
+  comment on the PR links it; check it with the harness's `--url`). The user looks at the preview; merge when they
+  say so.
+- **`main` has only merge commits:** PRs are merged with `gh pr merge N --merge` (squash and rebase merges are
+  off; a ruleset blocks direct pushes, force pushes and deletion of `main`). A merge deploys production
+  (`deploy-pages.yml`): https://victorzakharov.github.io/threejs-nanites/ ; check it with `--url` afterwards.
+- **PR branches have linear history:** only rebases. Start a branch from `origin/main`'s tip (its latest merge
+  commit is fine) and bring it up to date with `git fetch` and `git rebase origin/main`, then
+  `git push --force-with-lease`; never merge `main` into it. The `Linear history` check
+  (`.github/workflows/linear-history.yml`, required by the `main` ruleset) fails a PR with merge commits that aren't on
+  `main` already. GitHub's own "require linear history" rule on PR branches refused every new branch cut from
+  `main`'s tip (it counts `main`'s merges too), so it was dropped for the check (2026-10-19).
+- The repo is public (MIT; since 2026-10-11): pull requests from forks get previews too. Pages is served from the
+  aggregated `gh-pages` branch (production at the root, previews under `pr-preview/`); don't delete that branch or
+  switch Pages away from the workflow setup.
+- **Ship something viewable early**, then keep iterating: the user wants to look at it and give feedback.
+- **Never develop blind:** check every visual or performance change with the harness (screenshots + numbers) before
+  calling it done (see `tools/AGENTS.md`).
+
+## Temp files: never on C:
+
+The C: drive has no free space. Keep every temp/scratch file, probe script, browser profile and test output inside
+the project on G: (`tools/tmp/`, `tools/out/`, both gitignored), never in the system temp folder, `/tmp` or a
+scratchpad on C:. The harness already points TEMP/TMP at `tools/tmp/browser` before launching the browser.
+
+## Harness
+
+`tools/AGENTS.md` is the harness guide (`npm run harness -- --help` for the options). Measurements you need more
+than once go into the harness (views, probes in `tools/probes/`, image tools), never retyped as one-off snippets:
+retyped probe code drifts and compounds errors.
+
+## Goal
+
+1M ez-tree trees and 1.5M bushes with Nanite-style cluster LOD, free flight from the forest floor to 9 km over one
+planet-curved world (R = 150 km). Smooth (GPU budget 5.5 ms on desktop: 144 Hz on an RTX 4070 Ti; 14 ms on phones),
+and it must *look* right: no popping, flicker, brightness seams or missing trees. Feedback comes from the live site,
+by screenshot and the performance panel's copied report.
+
+**Reference low-end device** (the user's, since 2026-11-06; before it the $700 Intel Xe2 laptop): a PC with an AMD RDNA 2
+iGPU, a 1280x585 CSS window at DPR 3 (a 3840x1755 output), display rate unknown. Its first report (production, tau 8, 50%
+resolution) was 18.7 fps, 44 ms of GPU time, nearly all of it by pixels: ~27 ms in the TAA and output passes, the scene's
+pixels ~16. Tune the low-end steps and their estimates against it: `--device=amd` (its screen, and for `--probe=autosim`
+its GPU modelled on the dev GPU's, `tools/harness/options.ts`) with the `amdground` view (its report's camera).
+It's reachable over SSH (since 2026-11-07): `npm run remote -- <harness options>` runs the harness on it, at this commit
+(pushed), and copies `tools/out` back to `tools/out/remote/` (`tools/remote/run.ts`; host alias `amd-pc` in the dev
+machine's ~/.ssh/config; set up once with `tools/remote/setup-device.ps1`). Measure there before telling the user what a
+change does on a weak GPU; the PC must be on. Its Profile GPU takes over 300 s: `--timeout=900`.
+
+## Mistakes not to repeat
+
+What went wrong in past sessions (the user: "document all slops, so next time they don't happen"):
+- **Estimates as if measured.** A weak GPU's frame time was predicted by scaling the dev GPU's numbers (x15, then a
+  model): "about 12 ms" came back as a worse report (48 fps against 55), and a x15 model read 40-50 ms after every tier.
+  The dev GPU's split of the frame isn't a weak GPU's (on the AMD PC tree draws were 56% of the frame, on the dev GPU
+  under 20%). Measure on the device (`npm run remote`); label anything else an estimate, with what it rests on.
+- **A saving read off a broken image.** A rewritten impostor shader rendered black and its runs read as faster; a TSL
+  var first assigned in a branch reset in the next. Look at the images (`img.ts mean`, crops) before believing a number.
+- **Floating-point thresholds.** `Math.SQRT1_2 ** 2` is 0.5000000000000001: two resolution steps landed just above
+  `<= 0.5`, and the tiers stalled. Compare with a margin (`<= 0.505`) where a value comes from arithmetic.
+- **A new rule without its exit.** A "don't climb back to the resolution you left" ceiling also held with the GPU far
+  under budget (71% with 40 ms spare). For every hold or ceiling, check the case where the cost has gone away.
+- **Explaining before reading.** A tier "stall" was explained with a guess; the code showed Profile GPU cleared the
+  tiers. Read the code path before telling the user why.
+- **A switch tuned on one GPU.** The leaf prepass's density rule came from the dev GPU; the AMD PC saved 2.4-7 ms with
+  it on where the rule said off (and at 1080p the dev GPU did too). A per-GPU trade-off is measured on the device, or
+  decided at run time by timing both.
+- **Building before checking the picture.** A 4K output-pass upscale was built and wired before seeing that a bilinear
+  upscale looks like the browser's stretch. Mock the visual result (`--ab`, crops) first, then build.
+- **The panel's own guesses.** "display ~30 Hz" was the slow GPU's frame rate read as the screen's. Values derived from
+  what's being measured can't describe the setup.
+- **Scripts the user runs.** A setup script went silent for minutes on one step (Windows' capability install) and read
+  as frozen. Anything the user runs by hand shows numbered, timed steps, each tool's own progress, and stops on an
+  error with where the log is. In PowerShell strings `"$x:"` is a drive-qualified variable: write `${x}:`.
+- **Shells across SSH.** The remote shell is Windows' cmd: an unquoted `&` in `--query` split the command. Quote
+  every argument (`tools/remote/run.ts` does).
+- **An unbounded GPU queue.** Chrome kept submitting frames the AMD PC's iGPU couldn't keep up with: at 1080p each
+  waited a median 5 s from submit to done, and the desktop behind them (the mouse moved in jumps). Found only by the user,
+  on that PC: the dev GPU never queues. The page's loop now keeps at most 2 frames on the GPU (`?gpuqueue=N`; 1 cost 14%
+  of the frames, 2 none: 78 ms), the report shows submit-to-done, `--probe=gpuqueue` measures it (headless queues too).
+- **"Impossible".** Native 4K at 60 fps on the iGPU was called out of reach; the user's target (1080p at 60, upscaled
+  to 4K) was the useful framing. Say what a goal costs and what has to get cheaper, not that it can't be done.
+
+## Open work: GitHub issues
+
+Open problems and planned work are GitHub issues (`gh issue list`), labelled by priority (`P1` next up, `P2`, `P3`),
+area (`performance`, `mobile`, `visuals`, `tooling`, `refactor`, `bug`) and size (`size: S` up to ~2 h, `M` ~3-4 h,
+`L` about a day, `XL` more), with the estimate in the body, at this project's pace (the demo took ~3 days from an
+empty folder). Read the open `P1`s first in a new session. Close an issue from the commit that fixes it (`Fixes #n`)
+and add what you learn to it; open one for a new problem you can't fix now. How things work belongs in this file,
+history in git.
+
+## Decided
+
+- Trees become 2-triangle impostors under ~20 px tall (each tree its own threshold); impostors are relit (albedo +
+  normal atlases), cross-faded by a dither, never narrower than 2 px, and cast shadows. Billboards make 1M trees cheap
+  from the air; occlusion culling is for the forest interior.
+- Leaf LOD levels keep the coverage of the leaves they replace (not their area); bark group errors are the max of
+  their children's and their own (Nanite's rule).
+- Past the shadow map and from high up, receivers get an average shadow (canopy self-shadow, ground darkened by
+  forest density), not full sun.
+- Planet curvature is applied in the vertex shaders (drop d^2/2R) to everything, culling included.
+- The scene renders into a HalfFloat target (one sample under TAA, 4x MSAA without); a render pipeline tone-maps it
+  to the canvas.
+
+## TypeScript
+
+`src/` is TypeScript, `strict`, checked by `npm run build` (a type error fails the deploy). TSL nodes are typed by
+their shader type: helpers take `Float`, `Vec3`, `Uint`... from `src/types.ts` (the library's `types.ts`) (`Node<'vec3'>` has the operators, a
+bare `Node` has none). Where `@types/three` lags the runtime (Lambert's `emissiveNode`, `receivedShadowNode`'s
+argument, the WebGPU backend's `device`, untyped bitcasts), the cast lives in `src/nanite-lib/three-gaps.ts` (re-exported by `src/three-gaps.ts`) with a note; don't
+scatter `as any`. The typings' `min`/`max` take floats only: use `minU`/`minI`/`maxI` (`src/nanite-lib/gpu/constants.ts`)
+for integers. `uniformArray` needs its type explicitly (`uniformArray<'vec4'>(values, 'vec4')`). Objects with
+shader closures are built as typed locals and returned whole (see `_buildSet`, `_buildView`). The stage modules of
+`NaniteRenderer` declare `this: NaniteRenderer`; the class merges their types through an interface. The tools (`tools/`: harness, probes, model importer) are strict
+TypeScript too, checked by `tsc -p tools` (part of `typecheck` and `build`); Node runs them directly (type stripping:
+only erasable syntax, `.ts` in imports). A probe is one expression typed against `Demo` (`src/harness-api.ts`, what
+`window.__demo` holds); `session.ts` strips its types before the page evaluates it.
+
+## Architecture notes
+
+- **Files stay under ~300-400 lines** (the user's rule): split a module before it grows past that. `src/main.ts`
+  starts the loading and picks WebGPU or WebGL; `webgpu-start.ts` is the WebGPU mode's setup, `webgpu-forest.ts` its
+  forest and impostors, `webgpu-frame.ts` its frame; `lighting.ts` (sky, fog, sun, shadow map), `resolution.ts`,
+  `auto-quality.ts`, `textures.ts`, `placement.ts`, `warmup.ts` (the startup's shader compiles) and `harness-api.ts`
+  (`window.__demo`) are split out of it.
+- **The library** (issue #17): `src/nanite-lib/` is the generic Nanite-style renderer, which another three.js project
+  could take as it is. Nothing in it imports from outside it but `three/webgpu`, `three/tsl` and `meshoptimizer`
+  (`tools/check-lib.ts`, part of `typecheck` and `build`, fails on anything else). The demo imports it through
+  `index.ts` (the public API); a worker imports straight from the module it needs, so its bundle takes only what it
+  imports. Its parts:
+  - `dag/`: the cluster DAG build for any mesh (`build.ts`, `leaves.ts`, `coverage.ts`, `util.ts`, `types.ts`;
+    `cut.ts`, a fixed cut by error).
+  - `model/`: the `.nm` file (`encode.ts`, `decode.ts` with `loadModel`, `model-worker.ts`, `source.ts`).
+  - `alpha.ts`: the cards' coverage scales and masks.
+  - `gpu/`: the per-frame renderer. `renderer.ts` is the `NaniteRenderer` class (buffers, per-frame calls, stats),
+    with its methods in modules by stage attached as prototype mixins (`buffers.ts`, `culling.ts`, `hzb.ts`,
+    `draw.ts`, `billboards.ts`), plus `prepass.ts` (the leaves' depth prepass), `softraster.ts`, `splats.ts` (tiny impostors into its buffer), `shading.ts`
+    (material pieces), `chunks.ts` and `constants.ts`. Its inputs are in `types.ts` (`NaniteType`, `NaniteInstances`,
+    `NaniteTextures`).
+  - `impostors/`: the atlas, its bake and its coverage.
+  A mesh has two kinds of part, kept under the forest's names: `bark` (solid triangles) and `leaves` (alpha-tested
+  cards). Whatever is the application's goes in through the hooks of `NaniteLook` (`gpu/look.ts`; `defaultLook()`
+  for none): the world's curve, per-vertex motion with its margin and MRT output (`motionOutput`), per-instance tint
+  and value, and the solid, card and impostor colours. The forest's hooks are `src/forest/look.ts` (planet, wind,
+  tints, autumn). `src/forest/forest.ts`'s `NaniteForest extends NaniteRenderer` with the forest's own state (the
+  wind uniform, tree and statue counts). The debug switches (`?sw=`, `?occalt=`...) are still read from the URL
+  inside the library. `examples/gltf.html` is the library alone: a glTF rock (ez-tree's, MIT) as 250k instances,
+  with the default look and no TAA (cut-out alpha: `NaniteTextures`' dither switches off); a second page of the
+  build (`vite.config.ts`), deployed at `examples/gltf.html`, shot by `npm run harness -- --example`.
+
+- `src/trees.ts` lists the variants; `tree-grow.ts` grows one with ez-tree, scaled to metres, in its DAG worker (see
+  Loading below for how ez-tree is bundled).
+- `src/nanite-lib/dag/build.ts` builds each variant's cluster DAG (in a worker, `dag-worker.ts`; in Node for tools):
+  bark via meshoptimizer (128-tri clusters, groups of ~8, simplify to half with group-border vertices locked); leaves
+  (`leaves.ts`) by keeping half the cards and growing them until they cover what the group did
+  (`coverage.ts`: the cards through their texture's alpha mask, `maskOf` in `alpha.ts`, counted on a grid
+  from 4 directions; ~1.3 per level); shared pieces in `util.ts`. Growing by √2 (keeping the area) covered far
+  more than the tree (its leaves overlap, the fewer bigger cards much less): each coarser level closed the gaps, and
+  at tau 8 the forest was a bright even carpet (the user's zoom: "washed"). Now tau 1..8 look alike (`zoommid`:
+  mean colour within 2/255) and match the full-detail leaves (`leaferr=100&shadowtau=1000`); -0.2..1.4 ms on every
+  view; the far-field shading matches the real map within 1/255 (was 5). `?leafcover=0` for the old growth. Full
+  detail casts less shadow than it should: its leaves are smaller than a shadow texel. Every
+  cluster stores its LOD sphere/error and its parent group's sphere/error. A coarser leaf level's error is `LEAF_ERR`
+  (0.175, `?leaferr=`) x its leaf size: a *smaller* share switches to it sooner. At 0.35 leaves were kept under ~3 px
+  at tau 1 (crowns many deep: ~8 triangles per pixel on High, 7.7M software-rasterized at the user's spot); at
+  0.175 a third of that, ~10% less crown coverage past ~200 m (`tree share` on `fogline`/`slope`/`d550`).
+- Planting (`src/planting.ts`, plain TypeScript, in `plant-worker.ts` workers, started at the top of loading): the land
+  in 512 m tiles, each planted from its own seed with a fixed candidate density (`densityFor` samples the acceptance
+  share once so the totals land near 1M trees / 1.5M bushes), assembled in tile order: the same forest whichever
+  worker finishes first. It was one main-thread loop over ~7M candidates: 6.8 s of the user's load (half of it
+  `roadDistance` looping over the road's segments for every candidate: it has a bounding-box early-out now). Its
+  pure dependencies are split out for the workers: `noise.ts` (fbm, `heightAt`), `road-path.ts`, `autumn-cpu.ts`.
+- No WebGPU (issue #39; Firefox on Android): `main.ts` checks `navigator.gpu` before anything starts (`beginLoading()`
+  starts the workers and downloads; it used to grow every tree first) and shows a warning with a Continue button on
+  the loading screen (`ui.ask`); Continue runs the reduced WebGL 2 mode, `src/webgl/` (`startWebGL`: three's
+  WebGPURenderer with `forceWebGL`), from the same loading work. A null adapter gets the same warning when it's
+  known (the adapter is requested alongside the workers: awaiting it first held them back ~0.3 s). The mode has the
+  terrain, sky, fog, clouds, sun shadows and the forest floor (after the first frame, its shader compiled meanwhile:
+  1.8 s on its own; the grass too, 2.2 s; `?glearly=1` waits for both); its forest (`webgl/forest.ts`) is near trees (`webgl/near.ts`) as instanced meshes at fixed
+  DAG cuts (by distance, rescanned on the CPU from a 64 m grid when the camera moves; out to 12 / 30 / 80 / 180 m at
+  the cuts for 1000 / 350 / 120 / 40 px tall, touch 10 / 35 / 110 m at 400 / 90 / 25 px; `?glnear=`, `?glpx=`; with
+  two levels, 60 m at 160 px, a trunk a few metres away was smeared, its branches square) and the baked impostors.
+  Over a band of +-6% round each radius (`?glband=`) a tree is drawn at both levels (the last: geometry and its
+  impostor), the pixels split by the dither: the scan lists a tree in every level whose range (plus 4 m) holds it,
+  and the vertex shader works out its band from the camera every frame (`near.ts`, the level by `userData.glK`):
+  no pop from one cut to the next, nor at a rescan. From level 2 on the leaves are cut out, not dithered
+  (`?glleafdither=`): their coarse cards' dithered edges shimmered from 150 m up (`plazahigh` turning 919 -> 119
+  flicker events, WebGPU ~110); a cut-out near read ~4/255 darker than WebGPU on the ground. In the shadow map (`inShadowPass`: the shadow camera is orthographic) the
+  casters take the plain cut-out and a dither that stands still (`steadyDither`): moved every frame under TAA, every
+  shadow flickered with the camera still (the user; `ground --dolly --step=0` 1154 -> 48 flicker events, 37 without
+  shadows). ~+1 ms GPU on the dev GPU over the two levels (the bark's discard); the same on the phone.
+  `--probe=glnear` walks the camera and checks every tree in a band is in that level's list (`audit`): the CPU's
+  copy of the radii's jitter once read 1.15-1.45 against the shader's 0.85-1.15 (`jitterCPU`), and trees were drawn
+  by one level (half their pixels: see-through under TAA) or none, shadows and all (the user).
+  `--probe=gltris` lists the triangles by level and kind. The impostors are instanced quads in 1 km cells, culled
+  and thinned on the CPU (a cell draws the share of its shuffled trees that `MIN_PX` keeps at its nearest edge). Grass is `grass.ts` with `webgl: true`: no keep
+  pass (compute), so each ring draws every cell of its tiles in view and runs the keep test (`bladeOf` in
+  `grass-keep.ts`, shared with the compute pass) in the vertex shader, collapsing the dropped blades onto their root,
+  at density 4 on desktops (`WEBGL_DENSE`: x6 cost ~2 ms GPU on the dev GPU, x4 ~1.5, the phone's x1 at half the
+  radii ~0.3), wind motion under TAA (below), in the scene after the first frame like the floor (its compiles were ~1.7 s of the load; `?glgrass=0`
+  none). The first draw of the scene waits ~1 s for the GPU process (a `gl.getError()` right after it blocks that
+  long): with the TAA's passes that shows as the first frame's time, drawn straight to the canvas it came after
+  "first frame ready"; compiling the passes ahead saved nothing. GPU time comes from `EXT_disjoint_timer_query_webgl2` where the browser has it
+  (Chrome, headless too; not Firefox): the panel's GPU line and the harness's `gpu` column. Run to run, WebGL GPU
+  times on the dev GPU swung ~2x (ground 7 or 13 ms): measure a part's cost with `--probe=cost` (`?cost=grass,...`:
+  scene objects by name switched off and on in alternating blocks in one page). It has the performance panel
+  (`webgl/hud.ts`), the scene details, waypoint, compass and the settings menu (`menu.ts` takes the forest,
+  TAA, god rays, grass and the GPU profile as optional: left out, their switches and keys aren't shown; the quality
+  presets set the resolution and the near radii, x 1 / sqrt(tau)). The trees sway as `_vertex`'s wind (the menu's
+  Wind switch, G). The statues (`webgl/statues.ts`) are drawn once Lucy has arrived, at three DAG cuts (900 / 250 /
+  70 px tall, sharing her vertices) picked per statue every frame by her height on screen, with the bark material
+  (her stone layer, untinted, no wind): never impostors, as on WebGPU (+0.13 ms on `plaza`). The output is
+  main.ts's (`webgl/output.ts`): the scene into a half-float target (0 samples: three's WebGL backend takes 1 as
+  multisampled, and its depth blit failed) with one output: with the wind output (MRT) ANGLE on D3D11 rebuilt every
+  program at its first draw whatever `compileAsync` had done, a 1-1.7 s freeze after the reveal (the user), so no
+  wind motion vectors (`?glwind=1` for them); TAA's reprojection takes WebGL's -1..1 clip z, god rays, the TAA with upscaling (`resolution.ts`:
+  the canvas at the display's ratio, auto quality's scale moves the scene's target, so no canvas resize), the output
+  pass; leaves and impostors take the dithered alpha. The renderer
+  stays bound to the scene target between frames: compiles in flight read its outputs. Without the frames read
+  darker than WebGPU's: with `rays=0` on WebGPU the means matched within ~2/255, and now they match with the rays.
+  Where the GPU can't render to float targets, or with `?gltaa=0` / `?taa=0`, the old 4x MSAA canvas, no rays;
+  without float targets (`?glfloat=0` to test) the impostor atlas and the sky's cube are 8-bit too (`createAtlas`'s
+  `bytes`: the normals stored as n x 0.5 + 0.5). The
+  TAA resolve costs ~1.2-1.6 ms on the dev GPU at the phone's 1152x2496 output (`--probe=cost --query=cost=taa`).
+  The impostors are drawn as on WebGPU: shadow casters (each 1 km cell's quads turned to the sun, `GROW_SHADOW`, in
+  the shadow map only, thinned by the camera's tests as WebGPU's shadow view lists them, culled to cells in the
+  shadow map whose shadows can reach the view; `?glimpshadow=0` none), the shadow map looked up past their own
+  caster (`receivedShadowPositionNode`), the per-type coverage holes and far drop (`impCov`), and the cut-out alpha
+  scaled per mip by `impostorCoverage`'s scales (from a float texture: 360 floats are more uniform vectors than a
+  WebGL 2 fragment shader is sure to have). Each quad blends its two elevation tiles as WebGPU's do (the union of
+  the silhouettes, ±7.5 degrees round each midpoint): one tile at a time switched whole crowns as the camera
+  climbed, the user's "tree shimmer" from 169 m. Its screen axis is the camera's right from straight above
+  (`?glsteady=`: the view direction's turned with every step there), quads wider than `?gldither=` (4-8 px) take the
+  cut-out alpha (each tree its own threshold) rather than the dither, and the coverage holes are only in quads under
+  `?glholes=` (8-24 px): dithered, the far trees against the sky were a speckle that TAA never settled (the user:
+  "those distant trees are weird"). Without the casters the forest from 450 m was ~17/255 brighter and the
+  meadows had no tree shadows; with the casters but the raw alpha, ~5/255 darker at 1.1 km. Now `slope`, `d1100`,
+  `topdown700`, `fogline` and `phone9k` are within ~3/255 of WebGPU. The casters cost ~1.5 ms on the dev GPU from
+  450 m-1.1 km; the shadow pass is skipped from high up as on WebGPU (`shadowFarOnly`). Debug colours (`webgl/debug.ts`, the
+  menu's `debugModes`): level (near levels green to red, impostors red), tree, type (with `type-masks.ts`); no
+  clusters or rasterizer. Nodes first built in a Lambert's emissive read the instance attributes as 0 (every tree
+  type 0): they go through varyings (`iAf`, `typeOfF` in `instanced.ts`). Profile GPU where there are GPU timers
+  (`profile.ts` lists only the steps the mode has). Missing: occlusion, the software rasterizer, splats (no
+  compute). Auto quality is the pixel ratio by the median frame of each second (`budget` 17 / 33 ms), none in the
+  first 3 s or 2 s after a step, a step down undone (resolution held 30 s) if it didn't save 10%; at half the
+  resolution or with it held, the near trees' detail (tau x1.5 up to 8, a trial too: under 5% saved goes back),
+  undone first coming back: by an eased mean, the startup's 250-350 ms frames
+  stepped it down and back up twice, resizes the user saw as flickers in Firefox. `--probe=webglloop --query=webgl=1`
+  runs the page's loop and lists the steps, the frames over 50 ms and `resizedAfterDraw`. A new
+  resolution is applied at the start of a frame, right before it draws: resizing a canvas clears it, and set after a
+  frame (auto quality, the menu) the browser showed that frame blank, a flicker at every step (the user: "it should
+  not flicker when changing quality, regardless"). The copied report ends with the startup timeline (steps, resizes,
+  shadow-map sizes, the floor coming in, slow frames); `?startloop=1` runs the page's own first 10 s under the harness. Each program compiles on the main thread in WebGL: one bark
+  and one leaf material for every type (the layer by a select chain on the instance's type, +0.25 before the floor:
+  interpolated, 3 arrived as 2.9999 and speckled the trunks). `?webgl=1` runs it on a WebGPU browser (the harness
+  presses Continue itself; `?gate=1` stops at the warning: `--load=1 --query="nogpu=1&gate=1"` shows its time, the
+  downloads before it and `tools/out/load-error.png`); `?nogpu=1` as if there were no WebGPU.
+- Loading (issue #6; measure with `--load`, `tools/AGENTS.md`): 17.4 -> 6.4 s to the first frame on the dev machine
+  (production build, medians of 3 cold boots), 43 -> 20 s at a phone's size and pace (`--cpu=4`); the script 3.3 ->
+  0.34 MB gzipped. Everything that needs no GPU starts in workers at the top of `main.ts`, before the GPU is asked
+  for: the texture arrays' layers (`texture-worker.ts`: fetch, decode, draw at 1024 on an OffscreenCanvas, the
+  leaves' coverage scales and DAG masks; the stone marble), the floor's maps (`floor-worker.ts`, one worker for the
+  soil and one per kind of leaf: one for all took ~5 s), the planting, the terrain's grids (`terrain-worker.ts`,
+  three's own PlaneGeometry and normals: the same vertices), the trees (each grown and its DAG built in its own
+  `dag-worker.ts`, its leaf mask in a second message) and Lucy (`nanite-lib/model/model-worker.ts`). ez-tree's npm build inlined its
+  20 textures (4 MB of a 5 MB script) and loaded them through the DOM: Vite bundles its source instead, its textures
+  module stubbed (`vite.config.ts`, for the workers too; `optimizeDeps.exclude` so the dev server does the same), and
+  ez-tree's bare `three` is three's core from source (only what it uses, in the DAG worker). Shaders: three.js
+  compiles a pipeline the first time it draws, and the GPU process compiled them one after another (~10 s of the
+  17); `Precompile` (`warmup.ts`) calls `compileAsync` per mesh as soon as its material is final (sky and clouds
+  first, the forest after its buffers, the ground after the floor, the impostors after the bake) and
+  `compileComputeAsync` for the compute passes (collected by a dry run of the frame's culling, dispatching off), so
+  they compile side by side while the main thread goes on. Compiles in flight read the renderer's render target and
+  MRT as they build their shaders: the renderer stays on a 1x1 copy of the scene target (the same formats: the same
+  pipelines; the scene's own is resized meanwhile, which lost a compile's depth format) and other GPU work (the bake,
+  the sky capture) runs synchronously in `apart()`. `warmUp` then draws everything once (the shadow-map versions)
+  and runs a frame (the full-screen passes); `?precompile=0` for the old group-by-group compile. Also: the bake's
+  materials take their layer and tint as uniforms (4 pipelines, not ~36), the atlas coverage runs in a worker with
+  quickselect (sorting each level was 0.6 s in a browser), the road's distance map writes only near each piece of
+  paving (0.7 s -> 40 ms, the same values). The loading log (on screen, `[loading]` in the console) times each step
+  from the navigation's start; the slowest compiles and the last to finish are named. Then (#33, #32) 5.7 -> 4.1 s,
+  19.3 -> 16.8 s at a phone's pace: the ground's materials get their final shaders as soon as the terrain exists
+  (`ground/setup.ts`), compiled against their textures before they're filled (floor maps, cover map, litter map: made
+  empty at their size, filled in place: the same pipeline), from 1.7 s rather than 3.1; the compute passes compile
+  from the forest's creation (dry runs of the culling, the software rasterizer, the occlusion's retests, the grass);
+  the cover map is computed in a worker (`cover-worker.ts`); the chunks' runs use typed arrays; the statues no longer
+  hold the load up (Models above). three.js builds each shader in steps that yield to the main thread
+  (`buildAsync`), so every long main-thread task delays the compiles too: at a phone's pace they "took" 9-15 s.
+  The impostors' shaders (quads, splats, shadow quads) compile from the forest's creation too, against an empty
+  atlas (`createAtlas`: its render targets, and the frame sizes and coverage scales as uniform arrays the bake and
+  `impostorCoverage` fill in place; the splats are switched on once it's filled): the splat pass compiled after the
+  bake was the last wait (phone pace -0.6..1.4 s back to back with main; desktop within the noise). What's left is
+  the GPU process's compile throughput: some 20 render pipelines and 45 compute passes, the floor's ~1.5 s alone on
+  the dev machine (relief and cobbles ~0.6 of it; the rest is the PBR material with shadows), and the atlas read-back
+  queues behind them. Starting the terrain's compile before its grids (a stand-in geometry) finished no earlier.
+  `--probe=nodebuild` times each material's compile and the main thread's share (small: it's the GPU process).
+- Scenes (`src/scene.ts`): the loading screen offers the forest and the Lucy forest (the user's: 1T triangles at full detail, 250k
+  Lucys of 4M; the forest's are 38B: each type's full-detail count x its instances), two buttons (each with its picture, `public/thumbs/`, so one picks without reading: the harness's
+  `thumbtree` and (`--scene=lucy`) `thumblucy` views at `--dpr=2 --query="wind=0&tau=0.5"`, a tree in god
+  rays and a statue in the sun's halo against the open sky (the user's: "visually very different"), centred 384 px
+  crops; above the text on phones) and a 5 s countdown to the forest; `?scene=forest|lucy` skips it, the harness
+  skips it (forest) unless `--choose=` (`?choose=1`; `--scene=lucy` for the Lucy forest). Only the planting waits for
+  the choice (`beginLoading` in `main.ts`): textures, trees and terrain run during the countdown (Lucy's download after: the scene picks her file). The
+  Lucy forest is the same pipeline, with a denser Lucy (`denseModel`: `lucy4m.nm`, `npm run model -- lucy.ply
+  --name=lucy4m --tris=4000000 --height=4 --attr=0.25,1 --errscale=4`, 21.5 MB; at `--attr=2,1` the simplifier's normal term, returned as metres, swamped the error (up to 1.35 m with thousands of triangles left, flat from level 10 up): 43M triangles on a 2M pixel screen zoomed at tau 8, 15k for a 30 px statue and nothing between that and the 70-triangle root; now 5.1M, the same image (`--sweep=lod`, `--probe=lodcut`). Auto quality stops at tau 3 there (`minTau`, `?automin=`) rather than filling the budget; downloaded once the scene is chosen, built
+  from its coarse copy, the first 0.44 MB, see Models below): at 1M a
+  3x statue's face from 3 m was the decimation's facets at level 0 (the user: "people would laugh at it"; `lucyface`,
+  `tau=0.05` the same image). Its buffers: indices 95 MB, vertices 70, under WebGPU's guaranteed 128 MB a binding (an
+  8M Lucy would not fit). It: `plantForest(count, 'lucy')` plants `?lucys=` (250k) statues and no trees or bushes
+  (so no canopy cover and no litter: grass everywhere) on a disc of their own at the trees' spacing (2.9 km for 250k;
+  over the forest's 5.8 km they stood ~20 m apart: "can we have them denser?") on a jittered grid in the plant workers (`plantGrid`/`tryStatue`
+  in `planting.ts`; at random, the 3x ones stood in each other), 1-3x her 4 m (even in log; from 0.2, the user: "clamp min statue size at 5x"), plus `TIERS` of
+  bigger ones on coarser grids (`tierAt`: 3-8x on 30 m, a third of the cells; 8-20x on 90 m, a quarter; with only a few
+  giants it read as one height, the user), each tier clearing the smaller ones from under its plinths (`underBigger`),
+  each with a hue in its
+  b.w as 1 + hue (no wind for models: the phase is free). The look's `solidValue` hook (the library's, for solid
+  triangles; 0 by default) reads it and `solidColour` paints the marble (`paintOf`, `painted` in `forest/look.ts`);
+  impostors get minus it (autumn levels run 0..2: a plain `>= 1` painted red trees' impostors). Measured plain first
+  (statues never impostors): 20-45 ms frames from the air, all compute (24-63M software triangles: `slope`, `oblique`,
+  `orbit`, `phone9k`), 3 ms on the ground. So in that scene models may be impostors (`modelImpostors`: `firstModel` =
+  the instance count) and Lucy is awaited before the bake (her tile baked like a tree's; ~1 s into the load she's
+  there anyway): ~2 ms frames everywhere (250k of the 4M), the image's mean colour within ~1/255 of all geometry (`--ab="imppx=0|"`);
+  the impostors' shadows are a little heavier (the shadow quads' growth is fitted to crowns). The plaza's ring stays
+  unpainted marble. Lucy's impostor gains (`impGain`) are fitted on `ground` (side) and `topdown700` (top): uncalibrated,
+  her side impostors were ~22% brighter than her geometry, a statue changing brightness at the switch (the user). Not
+  on `slope` / `d1100`: there `imppx=0` (all geometry) lists 160-360M software triangles and most statues vanish
+  (their shadows stay), so the fit chased nothing (`impCov` 0.34). Scans fold: ~0.9% of Lucy's triangles face
+  against their vertices' normals (rebuilt from the faces; `node tools/nanite-model.ts public/models/lucy.nm`), and lit
+  by them a fold facing the camera was a black sliver (the user). Types with `unfold` (the models) light those by
+  their face (`unfold` in `shading.ts`: the bark draw's flag packed into its layer varying, `UNFOLD`; the software
+  resolve too; `?foldfix=0`); for every solid triangle, ez-tree's twigs changed ~11k pixels on `canopy`. The atlas
+  has one view per elevation (trees look alike from every side), so a statue's impostor faces the camera and its shadow
+  quad cast every statue the same blob, in the wrong shape, shorter, and switched with it (the user: "shadow in another
+  direction", "shadows disappear, then fade in"). So per type (`NaniteType.impostorPx`, `shadowPx`; arrays
+  `impPxOf`, `shadowPxOf`): the statues switch at 0.7 x (`?statuepx=`; 0.4: 75M software triangles from 450 m, 9 ms;
+  1: 2.6) and the shadow view makes them impostors only under a quarter of that (`?statueshadowpx=` 0.25, ~3.5 px tall:
+  `lucyshadow` and `slope` as all geometry's, means within 0.5/255; always geometry, every statue in the kilometres
+  of shadow map listed its clusters: `slope` 8.6 -> 4.4 ms, `topdown` 7.3 -> 2.2). Their shadows cost: ~10M shadow
+  triangles on the ground. Next step if it matters: azimuth tiles for the models (the
+  trees don't need them: from 8 sides round `lone600`, views `lone0`..`lone315` under `--typematch`, each type's
+  geometry / impostor pixels and colour stay within ~5%: random rotations, round crowns). The instance pass's
+  binary search for the clusters a tree can select (`emit` in `culling.ts`) took 14 halvings, 16k clusters a type:
+  Lucy 4M's 62.9k stopped up to 4 short, and where only her root or a few coarse clusters were wanted (shadow casters
+  at 5 x tau, far statues) nothing was drawn: shadows vanished as the camera moved off, came back, went (the user).
+  20 now; the forest's types converge in 14 (same image). Zoomed 5x at tau 1 over the statues the software list took
+  1.17M clusters (128M triangles): past its 2^20 the rest were dropped, statues in pieces until auto quality raised
+  tau ("a redraw cycle from near to far"): `SW_CAP` 2^22 (32 MB; `lucyfield` view). From high up (the shadow map
+  skipped, `shadowFarOnly`) the ground's average shade had only the trees' canopy: the statues' shadow area
+  (`?statueshade=` 3.5 m² at scale 1, fitted on `topdown700` and `slope` with `farall=1` to within 0.1/255 of the
+  real map) is the cover map's alpha, added to its red in `groundFar` only (no litter, no thinner grass under them).
+  The shadow view switches casters by the unzoomed size, as its LOD (`px x SHADOW_TAU_MUL / tauMul`): by the zoomed
+  one, zooming in swapped statues' quads for their real shadows (the user). Climbing straight down over a 6 m statue
+  (views `small50`..`small1600`, `giant150`..`giant2400`) its own shadow fades out from ~200 m: the map spans
+  kilometres there (sized for views to the horizon), a texel ~1.25 m at 400 m for a ~1 m wide statue. A depth bias
+  fixed in metres (it's a share of the growing depth range: ~1.2 m at 400 m) changed nothing visible. So looking
+  down the map covers only the ground in view (`groundSeen` in `lighting.ts`: the view's corners on the
+  plane under the camera, zoomed too (by the unzoomed view, zoomed in its texels were 5x as big on screen and small
+  statues had no shadow: the user; the casters' LOD stays unzoomed: at the zoomed one Lucy's shadows went 1M ->
+  27-34M triangles, +2-3.5 ms, her errors stalling at 1.76 m above a 70-triangle root), their circle at 0.75 of the half-extent, inside the edge fade; by altitude as before when
+  a corner sees the sky or further): small statues keep their shadows to ~1.6 km; the forest's counters are the
+  same, its shadows sharper from above (means: `topdown700`, `zoomdown`, `slope` within 0.3/255, `topdown` +1.2,
+  `d1100` -1.5). Past the map receivers fade to the trees' canopy self-shade (`treeshade` 0.35 of the sun): the Lucy
+  scene sets it to 1 (no canopy; the normals shade a statue's far side), else statues went darker past a circle
+  round the viewer (the user); her impostor gains were refitted with it. Their shadow casters take tau 2 whatever auto
+  quality's (`NaniteType.shadowTau`, `?statueshadowtau=`; it was at most 2: under it, the jump after a zoom flipped
+  medium statues' shadows between her root and finer levels, "1.3x longer", the user): at auto quality's tau 8 (shadow LOD 40 px) a statue ~10 px tall
+  cast from her 70-triangle root (her errors stall at 1.76 m from level 12: the normals' weight) and its shadow went,
+  and each tau step after a zoom changed them, near ones first (the user: "zooming in still redraws over 1-2 sec...
+  shadows change lots"; `small400` at tau 8: 86k shadow triangles, 2.7M capped at 2, +0.5 ms GPU; at 1 +1.7). Load: 4.0 s to the first frame (her 19 MB, now 17.8, in ~1 s on the dev machine's line) vs the forest's 4.2 (production build). The WebGL mode has only the
+  forest (`?scene=lucy` there, or a null adapter after choosing Lucy: the forest is planted).
+- Models (any mesh as a variant: `model:` in `VARIANTS`, `isModel`): `tools/nanite-model.ts` (`npm run model`)
+  reads a PLY, glTF / GLB or OBJ by its extension (issue #19; the readers are `tools/model-input/`, no new
+  dependencies: a glTF's meshes merged with their node transforms, mirrored ones' winding turned, meshopt-compressed
+  and quantized buffers read, Draco refused; an OBJ's faces by their `v` positions; materials ignored), stands it up
+  (longest axis, a glTF's y, or `--up=`), grid-merges huge scans to ~4x the target then meshopt-
+  simplifies to `--tris`, quantizes to 14 bits, builds the cluster DAG at `--height` (the variant's metres: errors
+  are in metres; another height is scaled, inexactly) and meshopt-compresses both (`public/models/*.nm`, format 4;
+  the encoding is the library's `nanite-lib/model/encode.ts`, the tool reads the mesh and writes the file), then
+  decodes the file as the site does and checks it matches. glTF and OBJ split vertices at uv / normal seams and
+  between meshes: the readers weld equal positions (`generatePositionRemap`), or the simplifier opens the seams as
+  cracks; PLY is read as it was (Lucy's file comes out the same, but for the header's build time). The tool imports
+  the model modules directly: the library's `index.ts` pulls in GPU code that reads `location`. `nanite-lib/model/decode.ts` only decodes (in its
+  `model-worker.ts`; no DAG build at load:
+  one file for every device; phones had a 20k-tri copy because of the 3 s build, the user asked why two). The DAG's
+  vertices are the model's own, so `nanite-lib/model/source.ts` rebuilds normals (summed in doubles: order-independent) and
+  planar uvs. A vertex whose faces cancel exactly (Lucy's back-to-back flaps: 1840 of them) takes its neighbours'
+  normal (`smoothCancelled`): left at zero, the shader's normalize made NaN and every triangle touching one black (the
+  user, close up on her drapery and hair); the DAG builder weights normals too, so the file is rebuilt with them. The index codec may rotate a triangle's corners. It's "bark" with no
+  leaves: stone layer in the bark array (`stone.ts`, a generated marble), no wind (`windOf`), not in the canopy cover
+  or the litter. Lucy (Stanford, non-commercial with credit; "don't animate or morph" her: hence no wind): 28M ->
+  1M tris, DAG 15.7k clusters with max group errors (see bark simplification below): 5.6 MB (positions 1.5, DAG
+  triangles 3.5, clusters 0.3). The vertices are numbered in the order the DAG's triangles first use them (`firstUse`
+  in `encode.ts`): in the simplifier's order the coarser levels' triangles jumped across the whole vertex range, and
+  the index codec stores the jumps (`lucy4m` 25.2 -> 23.0 MB, 19.5 -> 17.8 gzipped; `lucy` 6.45 -> 5.9). `npm run
+  model -- public/models/X.nm --reencode` rewrites a built file in the current format without the scan (not in the
+  repo), checking every triangle reads back within a step and every sphere holds the old one. Format 3 (#62): positions
+  in 14 bits (16 was finer than the scan: Lucy 4M's edges were ~40 steps, ~10 now whatever the statue's scale) and the
+  clusters' spheres in 16 bits over their own box, radii rounded up (culling and LOD stay conservative), the errors
+  as floats: `lucy4m` 17.8 -> 15.7 MB gzipped, `lucy` 4.6 -> 4.1; `lucyface`, `lucyfoot`, `statue`, `lucyshadow`
+  with `taa=0`: the same mean colours, specks on edges and creases, ~0.1% more clusters. Tried and dropped (#62):
+  per-cluster local indices (9.79 -> 9.74 MB gzipped: the index codec plus gzip already get it), per-level
+  numbering (9.69), parallelogram-predicted positions (at best ~0.5 MB for a decoder of its own). Format 4 (#63)
+  starts with a coarse copy: the coarsest levels holding at most 1/32 of the triangles (`COARSE_SHARE` in
+  `encode.ts`; `lucy4m` levels 6-16, 128k triangles, 0.44 MB gzipped, +2.8% on the file; `lucy` 62k, 0.22 MB), its
+  vertices numbered on their own, with octahedral normals (it hasn't the full detail they're built from). The worker
+  posts it as soon as those bytes are in (`decodeCoarse`), its finest level's errors 0, so the cut draws it however
+  near and there are no holes; `fillType` writes it in, then the whole model over it. The Lucy forest waits for the
+  coarse copy only (its impostor tiles are baked from it) rather than all 16 MB; with `?modeldelay=` (the whole model
+  held back) `lucyface` reads the same mean colour, softer up close (62k clusters to 65k). Ordering the whole file
+  coarse levels first was ~50% bigger (the finer levels' triangles jumped back to the coarse levels' vertices). Not
+  done (#63's rest): pages fetched by need, a resident pool, eviction: every statue here is the same mesh, so all of
+  it ends up needed. The WebGL mode still waits for the whole model. Statues stand on the lowest
+  ground under the plinth (`PLINTH`; by the centre one edge floated on the plaza's slope, the user). Models are never
+  impostors (`firstModel` in `switchPx`: the statues are last in the instances): theirs came out as pale blobs from
+  above, some missing (the user); views `plazatop`, `plazahigh`. Their atlas tiles stay empty (the bake skips them).
+  Nothing waits for a model's download (Lucy is ~5 MB): the model worker posts the file's header as soon as it has
+  arrived, the forest reserves the model's share of its buffers by it with no clusters (`BuiltTree.later`), and
+  `fillType` (`src/nanite-lib/gpu/buffers.ts`) writes it in when it's decoded, uploads those ranges and refits the boxes of
+  the chunks holding the statues (her LOD spheres reach 8.4 m, her mesh's box 2.4). On a slow connection the statues
+  appear after the first frame, coarse first; `?modeldelay=ms` delays all but her coarse copy to test that.
+  Once, 4 harness runs in a row came out ~2x slower in every pass (compute too) and then didn't reproduce with the
+  same code: re-run before bisecting a regression (and compare with the live site via `--url`).
+- The road (`src/road.ts`): a cobblestone road from the spawn point ~80 m to a plaza (radius 24 m) with a ring of
+  12 statues facing its middle (the user's idea). Placement keeps trees/bushes off it; a half-float distance map
+  (25 cm texels; 32-bit float filtering is optional in WebGPU) feeds the grass (none on it) and the floor
+  (`ground/cobbles.ts`: Voronoi stones in TSL, domed normals, average colour where finer than the pixels).
+  `?plaza=0` drops the ring. Views `plaza`, `plazaair`, `roadair`, `statue`. A waypoint to the plaza's middle
+  (`src/waypoint.ts`, the user's): an HTML overlay projected each frame, clamped to the screen's edge with an arrow
+  when off screen (`spawnback` view), faded on arrival; a menu switch; hidden under the harness unless `?waypoint=1`.
+  The compass strip on top (`src/compass.ts`) shows headings and the same waypoint, only while walking (the user);
+  `--query="waypoint=1&walk=1"`. The cobbles fade to their average by the pixel footprint's *area* (by its longest
+  side, along the road at a grazing angle, they went flat grey ~10 m ahead: "washed up", the user), in patches.
+- `src/nanite-lib/gpu/` does everything per frame on the GPU, once for the camera and once for the sun's shadow map:
+  instance pass → work items for the clusters that can be selected (clusters sorted by parent error, binary search
+  gives the prefix) → indirect cluster pass (DAG cut + frustum) → indirect draws with vertex pulling. The leaf draws
+  are indexed with one shared index buffer (`LEAF_INDEX` in `draw.ts`): the DAG build packs each leaf cluster's
+  vertices contiguously as quads, so the GPU shades the two corners a card's triangles share once (4 vertex shader
+  runs a card instead of 6: `plazane` 8.33 -> 7.84 ms, `closeup` -0.65, same image). Their indirect args are 5 uints.
+  Leaf depth prepass (`prepass.ts`, issue #12; `?leafpre=1|0`, default auto): where the leaves are dense on screen
+  the leaves are drawn first with only their alpha test (no colour, depth only), then again lit, depth-tested without
+  writing depth and still alpha-tested: only the front card of a pixel is lit, the same image (`img.ts diff` within
+  the floor, `--dolly` the same flicker). It costs the vertices and the alpha test twice, so it's on only above 1.35
+  hardware leaf triangles per scene pixel (off under 1.2, `?leafpredensity=`; the main view's counters read back 4x
+  a second; the HUD's debug line says which). In-page A/B (`--probe=cost --query="cost=forest.leafPrepass.mode&leafpre=1"`,
+  1080p, dev GPU): `canopyzoom --zoom=5` (6.6 per pixel) -0.8..-2 ms of ~14, `canopy` (2.0) -0.75, `treeline` (1.4)
+  -0.5, `fogline` (1.25) -0.1; under 1.2 it cost: `autumnred` (1.15) +0.35, `plazane` (0.8) +0.75, `d550` +0.2. The
+  two passes' depths match to the bit (a depth-equal second pass with the alpha test draws the same image, and costs
+  the same: what the lit pass costs zoomed, ~3.5 ms, is its vertices, ~14M leaf triangles); with no alpha test it left
+  scattered pixels different (TAA: crowns ~1.5/255 brighter). The prepass has no lights or fog (its Basic material
+  passed a normal and two positions for them). The second pass is its own `_buildMesh`: a
+  `NodeMaterial.clone()` drops `alphaTest` (a setter of `Material`'s over `_alphaTest`, which `copy` skips) and lit
+  the leaves darker. Front-to-back chunk order did nothing; more of the zoom's leaves to the software rasterizer
+  (`swarea=16`) moved ~6 ms from render to compute. The Profile GPU has a `leaf prepass` step (the other way round).
+  The cluster draws' varyings are packed in vec4s (`?pack=0` one by one): each is a location of 4 floats, and with
+  ~10 leaf triangles a pixel the vertex outputs cost (leaves 11 locations -> 7). The wind's motion for TAA goes as
+  last frame's world offset (3 floats; it was this and last frame's clip positions, 8), and the fragment projects
+  its interpolated view position with and without it: with no wind they cancel exactly. Projecting against the
+  pixel's own position (`screenUV`) left float noise that the TAA's history fetch picked up (~0.5/255 on many pixels
+  with no wind), and per-vertex screen motion changed the image near the camera. `canopyzoom --zoom=5` render
+  ~10.55 -> ~10.3 ms, with the leaner prepass ~-0.8 against before, `canopy` -0.5, ground views the same. What's
+  left zoomed (`--probe=cost`, `a;b` switches meshes together): the leaves' two vertex passes (~2.3 + ~3.3 ms), bark
+  ~1, compute ~2.6 (culling ~1.7, the software rasterizer ~0.9). tau 1.5 while zoomed halves it but the crowns grow
+  (tree share 0.194 -> 0.219, -1.8/255); `swarea=2` or 8 doesn't pay.
+  Each stage's compute dispatches run in one compute pass (`computeBatch` in `three-gaps.ts`: a node's own size or
+  indirect buffer): one `renderer.compute()` per dispatch was ~36 passes a frame, most a few threads, and their
+  overhead was frame time the GPU timers don't show (-0.4..0.8 ms; `orbit` with occlusion 8 -> 5.5 ms).
+  The instance passes run over the chunks in view only (`chunks.ts`): the instances in runs of up to 2048 (a planting
+  tile's plants, which the workers put in Morton order) with boxes round their spheres, tested on the CPU per frame and
+  view (frustum, fog distance, curvature) and listed two a vec4 in a uniform array (the main view's instance pass
+  already binds 8 storage buffers; ~1.1k chunks). It was a thread per instance, 2.5M, twice: the shadow map covers a
+  few hundred metres (-0.4 ms compute on the ground, -0.2..0.4 from above; `?chunks=0` tests every chunk: same image). Shadow-caster
+  meshes are on layer 1, which only the shadow camera renders.
+- Auto quality (`src/auto-quality.ts`) steers the pixel error `tau` so GPU time stays under a budget (80% of the display's frame, `src/refresh.ts`, at least 5.5 ms: 144 Hz on the
+  user's 4070 Ti, where 8 sat at ~115 fps; 14 on touch devices; `?budget=`); past the coarsest tau, the low-end tiers, least seen first, tier 1 before the resolution and the others after it (`--probe=autosim` replays a weak, noisy GPU; the report's `auto steps` is a device's path): 1 impostors at least 4 px wide (`impMinPx`, `?impmin=`: fewer, bigger quads, coverage kept; at half resolution most of their cost is per quad; `laptop` 87k -> 48k, the same image and flicker) and the grass at density 2 (`grass.thin`, `grassShare`: full to 2 m, the share from 40 m, each blade by its own chance and wider, cells rejected before the keep pass's noise; a phone's own density stays; density 1 made the far blades fat triangles and saved little more) and the output within 2x the scene's pixel ratio (`capRatio`, `?outratio=`: nothing at full resolution, the output follows the scene down; an AMD iGPU at DPR 3 upscaled 960x439 to 3840x1755 and its TAA and output passes were ~26 of 44 ms; the dev GPU at that size 1.82 -> 0.93 ms, means within 1/255, softer: the browser stretches the rest; a new output size waits for the next frame's `fit()`), 2 at least 6 px, density 1.5 and the output at one pixel per CSS pixel, 3 the average shadow for the map's (eased; `--probe=lowend`; the user's $700 laptop's Intel Xe2 at the limit: 27 ms in the forest, 14 in the Lucy forest; the forest's split, `--probe=cost` at its settings: main-view impostors dominate, tree geometry ~0.3 ms); past tau 8 it lowers the resolution (down to half the pixel ratio): phones (user's Samsung S25: 68 ms GPU
+  at tau 8) pay mostly for what tau doesn't touch. `--probe=auto` runs it with a 3 ms budget on the dev GPU. Coming back up it restores the resolution first (under 85% of
+  the budget), then the detail; `?autostart=low` starts the probe at the bottom ("under 60%" left it stuck blurry
+  after the orbit). At full detail (tau 1) under 55% of the budget it raises the resolution past the base pixel ratio
+  (1.5) in x1.15 steps, up to the output's (`maxScale` in `resolution.ts`: the screen's, at most 3; 1 on a 1x screen
+  or with upscaling off), and over the budget that extra goes first, before tau: a dense screen at 1.5 of its 3 was the
+  scene's pixels upscaled 2x (issue #3). A step is x1.32 the pixels, so under 55% it lands under 1.1 and doesn't swing
+  back. `--probe=auto --dpr=2 --query=autobudget=20`: scale 1.33 (3200x1800, native); at the phone's size on the dev
+  GPU 2 (1152x2496). Far from the budget (over 1.5x or under 0.5x) it steps bigger and every 250 ms. Across the zoom tau
+  moves with it as it eases, in and out, and nothing changes after (`zoomTau`): min(tau x zoom, the larger of tau and
+  `maxTau`). The LOD goes by tau / zoom, so up to tau x zoom a statue's cut is the unzoomed one (and a subset of what
+  was drawn unzoomed, so it can't overflow what that didn't), past it only finer; nothing is measured while the zoom
+  eases (`?autozoom=0`; `--probe=autozoom --views=canopyzoom --zoom=1`). Jumping to the last zoom's own setting was
+  tried: learned at a costly spot it made every later zoom blurry (the user: "washed", "optimize the algo before we
+  downgrade"). Coarsening to the budget about a second after the zoom was the redraw the user kept seeing: "it changes
+  statues noticeably", "far small statues losing their wings", "we should be making them finer, not coarser". Lucy
+  `oblique` zoomed, 1440p, `--lodcheck`: tau 4.73 -> 8 took a 17-32 px statue's shape lost from 10 to 21%, 33-64 px from
+  6 to 13%. Now it gets there during the ease, from coarser. Holding the unzoomed tau instead filled the 1M cluster list
+  from tau ~4 down (`--probe=caps`): threads list by runs of adjacent plants, so as the view panned, groups of
+  neighbours came and went (the user; `--dolly --step=0 --turn=0.02` at zoom 5: 64k / 50k / 12k flicker events at tau
+  1 / 2 / 3, ~240 at 4.73 and 8), at 25-30 ms. `--zoomtime` with `taa=0` (2560x1440, Lucy `oblique`, `lucyfield`,
+  `lucyhorizon`, `down800`): no tile moves after the zoom, 3-10k pixels differ between shots; zoomed GPU 8-12 ms, 15-20
+  held, still over the 5.5 ms budget: only frames over 75 ms coarsen it further (`ZOOM_FLOOR`; the resolution past 125
+  ms). The occlusion retest list has its own cap (`RETEST_CAP`; 1.06M at 4K `lucyhorizon`). A preset's or manual tau
+  follows the zoom too; one set while zoomed stays (`--probe=zoommanual --query="auto=0&tau=2"`). Whatever tau is set, a view's lists
+  can't overflow: `ListGuard` (`gpu/list-guard.ts`, `?listguard=0`) reads the counters every 150 ms and raises the view's `tauMul` near a cap, easing back
+  well under it; the report's quality line shows the factor (`--probe=listguard`; `[` down to tau 0.25 zoomed, 1440p: settled at 548k clusters in ~600 ms;
+  `--dolly --step=0 --turn=0.02` at tau 1, 5x: 39k -> 192 flicker events). Measure a cap with `listguard=0`, or the guard hides it.
+  A zoom is at most tau 8 at the unzoomed resolution: at 8 / 0.64 the far statues stay coarse. `--zoomtime` tiles
+  miss a small statue's wing: use `--lodcheck`, whose reference is the model drawn at high detail. Tau 2 zoomed on
+  `oblique` hits the 1M cluster cap (`CAP`), statues missing up to 83% of their shape, so don't refine past the lists.
+  Small statues are off whatever the tau (unzoomed, under 16 px: ~25% of the shape lost, +8..12/255 luma against a
+  control's -2): not explained yet. Twice the budget or more, it hurries: no trials, 0.7 s between steps (the AMD PC took 16 s at 15-17 fps to settle). Where it settled is kept per scene and screen (`auto.remember`, localStorage, written after 8 s still; `?autoremember=0|1`, the harness only with 1) and the next visit starts there. A resolution step down is half the pixels and a trial (a small last one isn't: too little to read), held 10 s before coming back up, and for a minute not back to the resolution it left: if it saved under a fifth of its share of the pixels
+  (median raw samples before / after), it goes back and the resolution holds until the cost changes by half (after
+  10 s) or for a minute: a phone 8 km up sat at 50%, blurry, for nothing (half the pixels saved 9%: impostors and
+  shadows; the user: "with blur, makes it look lame"); `--probe=auto` lists the `trials`. It's off
+  under the harness; `?auto=1&touch=1` runs a phone's startup (it starts at 60% resolution) — check it after touching
+  `webgpu-start.ts`'s setup order: a phone-only startup crash shipped once.
+- Performance panel (`src/perf-panel.ts`, wired in `src/hud.ts`, after cape-physics): its display rate is `refreshRate()`'s
+  (from its own fastest frames, an iGPU at 18 fps read as a 30 Hz screen); FPS avg / 1% low over 15 s,
+  frame p95, GPU draw + compute; a click copies a text report (the user's way to send numbers from other devices).
+  C copies it too, with the mouse still captured (a click releases it, which ends a zoom). The report ends with what changed
+  in the 4 s after the last zoom in (`src/zoom-log.ts`): tau, resolution, the shadow map, frames over 50 ms, model fills, and the
+  cluster and impostor counts every 200 ms. `--probe=zoomfilm` is the zoom frame by frame.
+  Off under the harness unless `?perf=1` (`--probe=perf` prints the report). Bigger type on desktop; its lines never
+  wrap, and the HUD on the right only ever widens (`minWidth`): numbers changing width shifted the layout (the user).
+  The settings menu's Profile GPU (`src/profile.ts`, `--probe=profile`) holds the view and quality, switches one feature off at a
+  time (shadow map, TAA, god rays, clouds, occlusion, software raster, impostor splats, terrain+sky, tree draws, half the pixels) and
+  appends the median GPU ms of each to the report: a device's breakdown in one paste. MSAA can't be switched live
+  (`?msaa=4`). Its progress shows in a banner (`src/profile-banner.ts`: step, bar, time left, then Copy report; the
+  panel's last line alone went unseen on a phone), and the menu button starts it on the press's end, however long (a
+  long press fires no click on a phone, and "hold still" read as press and hold: the user). `upscaling off` measures
+  the upscaling; no timings for 10 s fails it. `--probe=profileui` runs it as a person does.
+- Settings menu (`src/menu.ts`, Esc / the gear on touch screens; layout after gd-clone's pause menu): quality presets,
+  the scene switches, debug colours, overlays, Profile GPU, Fullscreen. It also owns the keyboard shortcuts (they flip
+  the same switches): add a new switch there once and it gets both. Fullscreen as in last-stand (gd-clone, the user: "there it
+  all works perfectly"): F11 is the browser's, the menu's button toggles the page's (and says which), a click only
+  captures the mouse, Esc releases it (losing the pointer lock opens the menu) and leaves fullscreen. It used to go
+  fullscreen on every capture, take F11 over and Keyboard-Lock Esc: leaving fullscreen took two presses (Resume went
+  straight back in), and screenshots of the fullscreen window sometimes failed. Headless can't test the fullscreen
+  path: check it by hand. The help pane (`#help` in `index.html`) is one key per action, in a grid (keys sharing a
+  fixed-width cell ran into their text: the user). `--probe=menu` clicks every switch and reads it back, and checks that in a short window only the columns
+  scroll (title and buttons stay in the box; on touch screens the page's touchmove block lets one finger through
+  there).
+- Music (`src/music.ts`, the user's: "ez tree had background music"): ez-tree's demo ambience (`public/audio/`), an
+  `<audio>` loop fetched on first play; it starts on the first click, tap or key (browsers need a gesture) with a
+  fade; M / the menu's switch / the touch screen's ♪ mute it, remembered in localStorage; paused while the tab is
+  hidden. It's birdsong: it fades out with the height above the ground (`HEARD`: full to 40 m, silent and paused
+  from 300 m; the user: "can't hear if too high"). Off under the harness unless `?music=1` (the harness's browser allows autoplay: `--probe=music`).
+- Grass (`src/grass.ts`, `?grass=` ring scale, 0.5 on touch, 0 = off; a menu switch): four rings of
+  blades round the viewer (cells 0.09 / 0.18 / 0.36 / 0.72 m out to 16 / 40 / 90 / 200 m, before `?grassdense=`), each a grid of world cells snapped to
+  the camera, so blades don't swim. Rings cross-fade by 3D distance and blades widen with the cell, so the covered
+  fraction stays even. Blades stand on the terrain mesh's own vertex heights (a float texture, same triangle split as
+  PlaneGeometry), density from canopy cover, slope and patch noise; wind writes TAA motion like the trees. Which blades
+  are drawn is decided in compute (`src/grass-keep.ts`): a thread per cell of the ring's tiles in view runs the keep
+  test (density, tufts, the cross-fade and morph, behind the camera) and appends the kept blades to the ring's list
+  (2 uvec4s: root, then height / width / lean / bend / flutter / sun-through in halves and the colour in unorm8s); the
+  ring is one indirect draw (`setIndirect`, its instance count from the pass's atomic counter, clamped to the list's
+  size, `ringCapacity`). It was all in the vertex shader, every cell's blade drawn, the dropped ones collapsed onto
+  their root: the vertex invocations cost, kept or not (`--probe=grass`: ~100-120k kept of ~660k tested on `meadow`).
+  Double-sided Lambert needs `normalViewGeometry` (the default flips the normal on back faces: dark blades).
+  Each ring morphs towards the next across its width (fewer, wider blades): a plain hand-over was a line in the grass
+  that moved with the camera (the user). The rings share their blades: each ring's cells are twice the last's, a
+  ring's cell takes the blade of one of its four finer cells (`childOf`, down to a first-ring cell whose hash makes
+  the blade), and the thinning keeps exactly those, so over the hand-over band each blade is drawn by one ring or the
+  other (its own chance `swap`), the same blade. With blades of their own (cells 0.2 / 0.45 / 1) the bands were where
+  one set sank and another rose: a line seen only in motion (the user, 4 m up: `meadowlow`, `--sweep=detail` 18 -> 1
+  jumps; the image's mean colour within 1/255; ~1.6-1.9x the blades in the outer rings, +0.04 ms compute, up to
+  ~+0.3 render from 25 m up). Each ring's grid is 8 x 8 tiles (`?grasstiles=`) and `update()` lists only
+  the tiles in the view frustum and the ring's annulus for the keep pass (a uniform array of their first cells); a
+  tile is out of the ring by its 3D distance (by the ground distance alone, from high up every tile under the camera
+  was drawn, every blade dropped: 20% of a phone's GPU time 8 km up). Blades: 4 segments, normals rounded across the width, colour per pixel
+  (root to tip, midrib, edges, dry tip): `grassclose` view. Blades that come and go with the distance grow out of
+  the ground over a share `?grassgrow=` (0.6) of their keep chance: popping in whole, walking showed grass appearing
+  ahead (the user); at 0.3 they rose within a metre or two of walking, a band moving along ahead ("a redraw circle",
+  seen only in motion). `--sweep=detail` holds the camera and moves only `detailPos` (`src/planet.ts`), where the
+  grass, the litter's blend and the relief measure their fades from: what changes is a fade sliding along (use
+  `taa=0` and a short sweep, `--steps=6 --step=0.3`: the heatmap is the largest jump over all steps; `meadow` 53 ->
+  13 jumps, worst 6.7 -> 4.1/255; growing over the whole chance, 1, made the grass sparser everywhere).
+  Tufts: a jittered 0.8 m grid of clump centres in world space (every ring agrees); a tuft's blades share a height
+  and dryness, are pulled towards its centre and fan out from it, and where grass is sparse whole tufts are kept or
+  dropped (`?grassclump=sparse,dense` gathering, 0,0 = evenly): evenly spread, the forest floor's few blades were lone
+  green spikes. Tufts fade out by ~35 m (a ring's cells get as big as them). Blades bend along an arc (capped at ~80
+  degrees: further, they lay flat as pale streaks), turn up to ~25 degrees towards the viewer when edge-on, and get
+  a yellow-green glow where the sun is behind the face we see (scaled down by canopy cover: the shadow map only
+  darkens the surface light, so a glow would stay in the shade). The old root colour (dark green up to 3/4 of the
+  blade) made every blade darker than the ground; with the ground's own colour (a debug test) blades matched it, so
+  the lighting was fine. Views `meadow`, `meadowclose` (a clearing ~350 m from the spawn).
+  Density (the user's reference: a UE meadow, a carpet of thin blades): `?grassdense=` blades per m² x (the cells
+  shrink by its root), 6 on desktops, 1 on touch. The blades widen with the cell, so they get thinner too. Cost on the
+  dev GPU (render over `grass=0`, 1080p, `meadow`/`meadowclose`/`grassclose`/`ground`): drawing every cell, x1 +0.2-0.3
+  ms, x4 +0.5-0.75, x6 +0.8-1.1, as much on the forest floor where nearly every blade is dropped (a branch skipping
+  the shaping for dropped blades saved nothing); with the keep pass x4 and x6 are ~+0.05 render and +0.03-0.06
+  compute. Blades have 4 / 3 / 2 segments by ring (`segs`: the far ones are a few pixels tall; -0.15 ms). Tufts gather only where grass is sparse (`flat`, before the slope): pulled
+  together, a dense meadow was tufts with bare ground between. Each blade has its own green, blue-green to
+  yellow-green. The floor's meadow colour is darkened up to half under the blades (`underGrass`, by the same road /
+  cover / patch terms, off with the menu's switch): lit as open ground it showed pale olive between them. The
+  outermost ring (1 segment: a triangle) fades it back to 1 from the third ring's radius to 80% of its own, and over
+  the same span its blades turn to the ground's own colour (`meadowColourAt`), unshaded, as they thin out: with the
+  grass ending at 90 m, the darker carpet with pale tips stopped at a line across the meadow (the user; `meadowair`:
+  the grass is ~18% darker near, the same as `grass=0` at ~200 m). The fourth ring costs ~+0.05 ms.
+- Bushes: ez-tree's Bush 1-3 presets are variants like the trees (cluster DAG, impostors, shadows, occlusion);
+  `placeBushes` adds `?bushes=` per tree (1.5, 0.5 on touch) after the trees in the same instance buffers, thickest
+  along the clearings' and the forest's edges; the canopy cover map counts trees only (`isBush`). They took the instances from
+  1M to 2.5M, which mattered while the impostor draw covered every instance (see the impostor list below). Nine variants overflow one atlas row (9216 px > WebGPU's guaranteed
+  8192): `atlasLayout` wraps the tiles into rows (bake, coverage readback and billboard UVs share it). Debug type
+  colours (debug 4) are ten hues 36 degrees apart, drawn without fog, tone mapping, ground, grass or god rays
+  (`type-masks.ts`: each of those moved or faked hues: ACES turned pines into aspens, sunlit ground passed for Oak Medium);
+  typematch takes the hue in linear light and classifies within 18. Gains are linear: a measured sRGB ratio r
+  needs about r^2.
+- Forest floor (`src/ground/`, after last-stand): `floor-maps.ts` is last-stand's procedural floor without its leaves
+  (soil, twigs, pebbles; 5 m tile; heights everywhere in cm / `HEIGHT_CM`); `floor-leaves.ts` the fallen leaves, a
+  texture-array layer per kind (oak lobed, ash leaflets, aspen round, conifer sprays after the user's photo at a 2.5 m
+  tile): height, normal and a per-leaf key (alpha: shown if the amount fallen is over it); both built in a worker.
+  `litter-map.ts`: a 256 m square of half-metre texels round the camera (rebuilt every 32 m from bucketed instances, ~17 ms of main-thread work: in
+  slices of ~2 ms a frame into its own arrays, published with its centre when done; `--probe=litter` times both)
+  holding the kind of leaf of the crown most over each texel, the amount fallen (all crowns) and that tree's autumn
+  level; the floor lays that kind's layer in that tree's colour, so the litter matches the tree above in shape and
+  colour (the user). Past the square the cover map's averages. `relief.ts` is the parallax occlusion in TSL (up to
+  32 steps, then 5 bisections; sampling max(floor, leaf) heights; 4 cm deep, fades by 40 m; `reliefSteps` uniform:
+  `?relief=0`, off on touch, a menu switch). Litter under dense canopy or any tree's fall, within ~200 m; the meadow
+  keeps its plain colour. A lone tree's litter goes by the litter map's amount alone: mixed with the cover map's over the
+  map's fading edge, open ground had a brown band along the square, moving with it (the user; `meadowair` view).
+  The shader works only where it shows (issue #4): the litter, its relief and the moss inside an `If` within 200 m
+  (`LITTER_GONE`) and a nested one where `under` > 0, the cobbles' Voronoi where `paved` > 0 and the stones are
+  still resolved (`COBBLES_GONE`); elsewhere the meadow colour, the paving's average. The derivatives (the uvs', the
+  cobbles' footprint) and the cover map's filtered read are `toVar`s at the top of the colour's `Fn`, the branches
+  sample by `.grad()` / `.level()`, and the joints' `fwidth(edge)` comes from the two nearest stones' directions
+  (same mean colour; specks on the far joints differ). The normal's lean is a variable (`tilt`) assigned beside the
+  colour and read by the normal node, which three builds after the colour. The floor's cost over the plain ground
+  (`--probe=cost --query=cost=terrain@terrain-high`, 1080p): `overview` 0.40 -> 0.08 ms, `floor` 1.27 -> 0.96,
+  `litterclose` 0.95 -> 0.70, `meadowair` 0.29 -> 0.16, `ground` / `plaza` the same (~0.5: nearly all near or
+  paved); at the phone's size `overview` 0.30 -> 0.17, `floor` 0.71 -> 0.62. A `.toVar()` made outside a `Fn` is
+  declared where it's first used: the litter's kind, its layer and the conifers' tile scale were first used inside
+  the relief's `If`, so past its 40 m fade, or with relief off (every touch screen), they stayed 0: every tree's
+  litter was oak's, sampled at one texel (a flat sheet without leaves on phones). Made inside the `Fn` now.
+  Gotchas in three r186's WGSL: an array texture's layer must be an `int(...).toVar()` (a
+  float index fails to compile), use `.level()` not `.grad()` on it, and the needle layer's tile scale must be a
+  `.toVar()` (computed inline it sampled one uniform colour). `?litterkind=0..3` forces one kind (debug). Views
+  `floor`, `litterclose`, `needlesclose`, `autumn*`; `--probe=litter` reads the map round the camera.
+- Terrain from high up (`terrainForAltitude` in `src/terrain.ts`, `?terrainhigh=0` off): from 350 m above the ground
+  the near square is `terrain-high`, the plain ground (`applyFarFloor`: what `applyFloor` comes to past 200 m, where
+  the litter, relief and moss are gone and the cobbles are their average; same image, `slope` 27 px over 8/255) on
+  coarser grids, 512 cells from 1 km, 256 from 3 km, 128 from 6 km (each back at 85%). They shade with the detailed
+  grid's normals and slope from a texture (`detailMap`): with their own, hills read smoother and ridges changed. The
+  1024 grid is ~2M triangles, over a pixel each from 9 km on a phone, and the floor's shader computed litter and
+  cobbles for every pixel and multiplied them by 0: the user's phone spent 4.3 of 15.5 ms on the terrain and sky at
+  9 km. Dev GPU 1080p: `phone9k` 2.13 -> 1.03 ms, `orbitsteep` 1.54 -> 0.86, `aerial` 2.29 -> 1.48, `oblique` 2.32 ->
+  1.79 (hairlines along the ridges: the coarser silhouette), `slope` 2.15 -> 1.96.
+- Autumn (`src/autumn.ts`, `?autumn=` 0 = summer): broadleaf trees and bushes are green, yellow or red by stands
+  (noise ranked by its sampled quantiles: 40 / 32 / 28%) plus a jitter per tree; pines stay green. The level rides in
+  the instance's wind phase as whole turns (b.w = phase + 2 pi L), so no buffer grew (a 9th storage buffer would
+  break the 8 limit). `autumnColour` turns the leaf colour in the hardware draw, the software resolve and the
+  impostors (masked to green texels there: the atlas has bark). Fallen leaves: `forestDensity` also writes the leaves'
+  amount (green 0.2, yellow 0.6, red 1, conifers `NEEDLES` 1.3 x crown) and level into the cover map's G / B (used
+  past the litter map; grass thins where leaves lie thick). Views `autumnred` / `autumnyellow` / `autumngreen`, `--probe=autumn`.
+  Calibrate impostor gains with `autumn=0`. From 9 km all geometry (`imppx=0`, `phone9k`) shows much less red and
+  yellow than the impostors; at 1.1 km (`d1100`) both show the same stands, so it's the far geometry (sub-pixel,
+  software-rasterized) that loses them, and what's drawn up there is the impostors and splats (issue #11).
+- Clearings (`clearingAt` in `planting.ts`): domain-warped fbm thresholded at its sampled 90% quantile (10% of the
+  land). They were a sum of sines: from the air a lattice of same-sized gaps (the user: "repetitive"; `aerial` view).
+- Leaf alpha is coverage-preserving: `coverageScales()` finds, per mip level and texture layer, the alpha scale that
+  keeps the full-size image's fraction of texels above the 0.5 cut-off; the leaf shader applies it by the sampled
+  mip. Without it, a tree's density and brightness jump when its LOD swaps to fewer, bigger cards.
+- Bark simplification weights normals/UVs (`simplifyWithAttributes`). meshopt folds attribute error into the error
+  it returns, which drives LOD selection: heavier weights mean less texture popping but many more triangles
+  (UVs run to ~10 along a branch). It's the normals that cost: at a quarter of their weight (`?barkattr=n,uv`
+  scales) `closeup` drew ~20% fewer triangles but popped 20x more (`--sweep=lod` with `taa=0`: 57 -> 1172 jumps); the
+  UV weight changes nothing. A group's error is the *max* of its children's and its own simplification's (Nanite's
+  rule: each switch moves the image by at most tau; `?barkerr=sum` for the old sum, meshoptimizer's demo, the drift
+  from full detail): the sum kept far trees' bark levels too fine (a 30 px oak: 2900 bark triangles, now ~350;
+  `--probe=lodcut`), 35M software triangles at the user's zoomed spot (now 9M), with the same popping; -0.3..1 ms
+  on every view. Lucy's `.nm` too (issue #20; `npm run model -- lucy.ply --name=lucy --tris=1000000 --height=4
+  --attr=2,1`, the scan in `tools/tmp/models/`, with the normals fixed, Models above). `--attr` scales the
+  simplifier's normal / uv weights (the file's header keeps it): the max rule at weight 1 halved her cut but popped
+  more than the sum had; by the normals' weight, `--sweep=lod` (`taa=0`) jumps on `statue` / `plaza` and the `lodcut`
+  at tau 1 for 400 / 100 / 10 px:
+
+  | file | statue (worst /255) | plaza (worst) | triangles |
+  |---|---|---|---|
+  | sum, weight 1 (before #20) | 688 (35) | 139 (23) | 110k / 35k / 7.3k |
+  | max, 1 | 830 (42) | 262 (28) | 53k / 18k / 252 |
+  | max, 2 (shipped) | 676 (34) | 161 (20) | 86k / 28k / 1.5k |
+  | max, 3 | 666 (34) | 119 (25) | 121k / 35k / 7.9k |
+  | max, 4 | 586 (34) | 76 (17) | 164k / 45k / 11.6k |
+  | max, 8 | 515 (34) | 29 (17) | 316k / 76k / 16.5k |
+
+  At 2: WebGL's 900 / 250 / 70 px cuts 197k / 64k / 24k -> 180k / 52k / 21k; `plaza` 2.49M -> 2.42M triangles,
+  `plazatop` 240k -> 233k software; GPU time, load and images the same as the sum's (means within 0.1/255). Her
+  root's error with the zero normals (Models above) was 2.4 m with the sum, 0.8 with max; they had inflated the
+  coarse levels' attribute error. `--dolly` with TAA didn't tell weight 1 from the sum (`plaza` 61103 / 61083).
+- Leaf PNGs have white RGB under transparent texels; `fillTransparent` (`texture-pixels.ts`, in the texture worker) replaces it with
+  the average leaf colour, otherwise mipmaps bleed pale halos into the foliage. The aspen texture is autumn-yellow and the pine
+  one reads yellow in sun: both get per-layer tints in the leaf material.
+- Impostors (`src/nanite-lib/impostors/atlas.ts`): the atlas has four tiles per variant, baked from 0, 30, 60 and 90 degrees up
+  (`ELEVATIONS`); the quad faces the camera and cross-fades between them by elevation as the *union* of the
+  silhouettes (mixing alphas thins the forest). With only side and top tiles, trees seen from ~45 degrees were the
+  top tile's dark splats (the user: "piles of poop"), and from high up the whole screen was one flat top view
+  ("flat like google maps"); with the in-between tiles, off-centre trees lean outwards like real ones. A
+  cylindrical billboard is edge-on from above and leaves a bald patch under the camera. Each tile's quad is
+  scaled (`GROW`, `?grow=a,b,c,d`: 1, 0.9, 0.8, 0.8) so a type's impostors cover as many pixels as its real trees
+  (`--typematch`'s `geo/imp px` line); the shadow quads by `?shadowgrow=` (1, 1.05, 1.45, 1.5: the real trees cast
+  from coarser LODs, fat leaf cards; with the camera's sizes the ground was ~4/255 too light from 1 km up; the sun is
+  32 degrees up, so only the second counts). It was 1.45-1.5 from above, fitted while half the trees were missing:
+  with all drawn, crowns overlapped many deep and covered ~2x their geometry's pixels. Alpha is
+  coverage-preserving per mip (`impostorCoverage` reads the atlas back once).
+- The Lucy scene's statues aren't round their axis, so their impostors have views round it (`createAtlas`'s `viewsOf`,
+  `impostorView`, `?statueviews=`, 8; trees have one, and no tiles in that scene: the atlas is 8192x512). With one, every
+  statue showed its front, the true shape coming in at the switch or through the zoom (the user: "small statues grow
+  wings"); reference coverage changes ~20% with the facing. They snap every 45 degrees: `--dolly --step=0 --turn=0.2`
+  ~+20% flicker events (`oblique` 1311 -> 1591, `slope` 4542 -> 5338). A solid mesh also keeps its baked size and alpha,
+  unmirrored (`NaniteType.impostorSolid`, `?statuesolid=0`): `GROW` (0.9 from 15-45 degrees up) and `IMP_COV` are fitted to
+  crowns, and on a statue the bright ground showed through. `--lodcheck`'s rows (1440p, `--lodk=15`, tau 4.73, cut / model
+  drawn at high detail): `oblique` 0.80-0.85 -> 0.94-0.98, `slope` 0.85-0.92 -> 1.00-1.04, `down800` 0.83-0.94 ->
+  1.00-1.07, `lucyhorizon` 0.90-0.98 -> 0.94-0.98; same frame cost. Its brightness is off by the god rays changing with
+  the zoom, not the statues (compare with `rays=0`).
+- Impostor coverage per type (`impCov` in `VARIANTS`: side, top, mixed by elevation; `impostorCov`, `holes` in
+  `billboards.ts`): where a type still covers more than its real trees after `GROW` (Oak Large: 0.8 side, 0.6
+  top; the bushes from above) its impostors get holes: the atlas cells of the mip a pixel samples (about a pixel
+  each), kept with that chance, each tree its own fixed pattern, like the gaps between leaves. First it was the
+  coverage dither scaled down instead, with the quads at their old size: TAA averaged the moving dither into a
+  translucent smudge, the forest from ~1.5 km went blurry (the user: "not a good fix"), and because every tree
+  used the same screen pattern, overlapping crowns didn't stack. A scale over 1 can't add coverage (Aspen and Oak
+  Medium cover ~0.7 of their geometry from the side). Fit by reboots with `?impcovside=...&impcovtop=...` (a value
+  per variant; `--typematch=cover` adjusts them live), top on `d1100`, side on `slope`/`fogline`; the types are
+  coupled (thinning the oaks uncovers the ashes behind). Far below the switch (quads under 8 px wide, all of it
+  from 4, `?impdrop=`) the scale becomes the share of trees drawn, solid, each fading out over 0.2 of its hash:
+  those aren't listed. Mean colour vs `imppx=0` (1080p, wind 0): `d1500` +0.3/0/-1.5, `d1100` +0.8/+0.4/-0.7,
+  `d550` -0.1/-0.1/-0.6, `topdown700` -0.7/-0.8/-0.9, `slope` -1.5/-1.4/-1.4, `overview` -1.1/-0.9/-1.0,
+  `fogline` within 0.5, `phone9k` within 0.7.
+  All geometry is not the truth far out: its sub-pixel trees thin out (the user: "without / with zoom, they are not
+  the same"). The truth is the same spot through the 5x zoom (`img.ts zoom`, `--zoom=5`; the `lone` / `lone600` views:
+  the loneliest tree near the test spot, 1.2 km / 600 m off). Unzoomed vs zoomed, 1600x900: impostors within
+  -1.5..+2.5/255 on `zoomdown`, `topdown700`, `d1100`, `d1500`, `slope`, `lone`, `lone600`; `imppx=0` up to +9
+  (`lone`: its trees nearly vanish, only their shadows left). The zoom tool once read 4/255 darker zoomed: the HUD.
+- Each tree switches to its impostor at its own size (`switchPx` in `src/nanite-lib/gpu/shading.ts`: impostorPx x a
+  per-tree factor in [1/1.6, 1.6], `?impspread=`). With one threshold the switch was a line at a fixed distance
+  that slid along with the camera (`--dolly` shows why: small real trees flicker in motion, impostors don't).
+- Impostors cast shadows: the shadow view flags the trees it leaves as impostors, and `buildImpostorShadowMesh`
+  draws their billboards turned to the sun into the shadow map. So the real map is used wherever it reaches; an
+  average shadow where trees were impostors changed visibly at the switch and with the zoom. An impostor looks the
+  map up on its sun side (`vShadowPos`: past its own caster quad) times the average self-shadow `?treeshade=`.
+- The shadow map's side follows the drawing buffer (`fitShadowMap` in `lighting.ts`): 2048 at 1080p, a power of two
+  from 512 to 2048 by sqrt(pixels), `?smap=` fixes it. A fixed 2048 at a laptop iGPU's half resolution filled 8x more
+  texels than screen pixels (at its settings on the dev GPU: 5.97 -> 4.51 ms frame with 1024). It shrinks only once
+  the smaller size has been wanted for 10 s (the first fit at once): auto quality's resolution steps after a zoom
+  halved it, every shadow twice as coarse for a second or two (the user: "zooming in... changes shadows too much").
+  The shadow casters' LOD is measured against the scene's height at scale 1 (`NaniteRenderer.shadowLodHeight`, set
+  by `webgpu-frame.ts`): in this frame's pixels each resolution step reshaped a giant statue's shadow. `--zoomtime`
+  (`tools/harness/zoomtime.ts`) runs the page's loop with auto quality, zooms and screenshots the 6 s after, with tau /
+  scale / map size by 250 ms; `budget=2` makes auto quality move on the dev GPU. Now only the statues' own detail
+  changes at its steps. `--flytime=ShiftLeft,KeyW` flies with the page's loop instead (6 s holding those keys; the
+  shadow map's extent steps are counted: climbing with Shift from 150 m, 13 steps of x1.25 in 6 s).
+- The shadow map's extent grows with altitude (texels ~2 px at the nearest ground) up to `?shadowmax=` (6000 m
+  half-extent); the light's depth range grows with it. Capped at 640 m, it was a rectangle of real shadows inside
+  an evenly shaded forest seen from 1.8 km. It's a rectangle in light space: up the sun's direction the ground is
+  foreshortened to sin(32 degrees), 0.53, and a square map spent half its texels there on nothing; that half is the
+  ground's times 0.53 plus cos(32 degrees) of the relief round the focus (5x5 heights) and `RISE` (80 m: the 20x
+  statues), in 10 m steps. Looking down from 400 m a texel along the sun is 1.03 m (was 1.5; across it 0.8):
+  `--probe=shadowmap`. Forest means within 0.6/255 (a little darker: sharper), the same cost and casters. Zoomed in
+  (the map fits the zoomed view) small statues' shadows are their full length; unzoomed their thin far end is under a
+  pixel (~0.6 m at 400 m) and fades: the user's "1.5x longer" zoomed in, now less so. The biases are in texels
+  (`?shadowbias=`, 1: the normal offset one texel on the ground, the depth bias as much along the sun): fixed at 0.6 m
+  and ~0.64 m, near the ground (0.1-0.2 m texels) they cut the first metre of each shadow, statues standing in a lit
+  ring "as if hanging in the air" (the user; `lucyfoot` view). No acne on `statue`, `closeup`, `bark`; the forest
+  0.2-2.6/255 darker (its contact shadows back).
+- Far-field shadow: past the shadow map, receivers fade to an *average* shadow instead of none (`makeFadeShadow` in
+  `lighting.ts`): a constant canopy self-shadow on trees (`?treeshade=`) and forest-density darkening on the ground
+  (`forestDensity`, `?groundshade=` 0.82, `?crown=`). Fading to fully sunlit made distant forest brighter, with a line
+  where the map ends. Calibrate with `?farall=1` (far shading everywhere) vs the real map on `topdown700`, comparing
+  mean image colour (0.7 matched the half-drawn impostors' shadows; now within 0.2 there). Keep
+  `treeshade` (0.35): the impostors' own shade is it, and their gains were calibrated with it.  From high up the map is skipped: past `FAR_TEXEL` (`?fartexel=`, 5 m) texels it can't draw one
+  crown's shadow, so the average blends in from half that texel size (by altitude: ~0.9-1.8 km on desktop, 0.2-0.4 km
+  on a phone's 512 map) and the shadow pass and its culling stop (`shadowFarOnly`; a phone 8 km up spent ~30% of its
+  GPU time on ~800k impostor shadow quads in 23 m texels). The coarse map lets light through: the average is up to
+  6-8/255 darker there, blended over ~700 m of climb rather than a jump.
+- The zoom eases over a fixed 150 ms (`?zoomms=`, `controls.ts`; at 300 the user still saw some wings grow, at 150 fewer): an exponential ease looked done at 4.9x after 300 ms and
+  crept on until 700, and while the view moves TAA can't settle, so thin wings stayed blurred until it stopped (the user: wings
+  coming in "~1sec after", views `userzoom`, `userzoom2`; with `taa=0` the image is final as the zoom stops). Dropping TAA's
+  history as it stops was a one-frame jump of ~22k px in a 480x270 crop (~500 without). Switching
+  the LOD to the target zoom at the start was tried: wide view at full detail, the 1M cluster list overflowed.
+- Right-mouse zoom (5x) narrows `camera.fov`; LOD follows via projScale (full detail, as if 5x closer), while the
+  shadow view's tau is multiplied by the zoom (shadow-map resolution doesn't change; without it shadow casters went
+  to 63M tris). Zoomed into deep forest it's still ~55k trees x ~1000 tris: no occlusion culling yet.
+- Impostors are *relit*, not baked lit: the bake writes an albedo atlas and a tree-local normal atlas (leaves cut
+  out with Discard and alpha 1 so MSAA gives true coverage), and the impostor material is Lambert with the same
+  lights, fog and shadow fade as the real leaves. Render-target textures are stored flipped (v = 1 - y).
+  Colour is matched per tree type and view (side / top) by `impGain` in `VARIANTS` (`src/trees.ts`), calibrated
+  after `impCov` with `npm run harness -- --typematch=calibrate --views=d1100,fogline --query="wind=0&autumn=0"`
+  (masks each type with `debug=4`, compares real trees with impostors, adjusts the gains live, prints new values).
+  The masks and colour shots are single frames at the same phase of the dither and jitter (`PERIOD`), jitter off,
+  TAA's history dropped: averaged, a see-through crown's pixel was mostly the ground behind it, which no gain
+  changes (the gains ran off to 0.1), and edge pixels blending two types read as a third. One gain for all
+  types left pines as near-black stars from above. The tiles are baked from the DAG cut each tree has at the
+  switch size (`dagCut`, `?bakepx=`, 0 = full detail).
+- Geometry and impostor cross-fade with a screen-space dither between 1x and `FADE_HI` x the impostor pixel size.
+  Impostors are never drawn narrower than `MIN_PX` (2 px): smaller trees are enlarged and a matching share dropped
+  per tree, otherwise sub-pixel trees flicker on/off as the camera moves. The share kept is `(w / MIN_PX)^2`: the
+  quad grows `MIN_PX / w` both ways, so that keeps the coverage (`w / MIN_PX` drew `MIN_PX / w` times the trees'
+  coverage, `?impkeep=width`: ~3x from 9 km; the image barely changed, the mean colour came a little closer to all
+  geometry, `imppx=0`; 1080p `orbit` 702k -> 391k impostors, -0.5 ms; the phone's 9 km view 636k -> 504k). The quads
+  are indexed (`IMP_INDEX`: 4 vertex shader runs, not 6): a phone 8-9 km up spent its time by their count (35 ms for
+  553k, ~20 for 317k), not by its pixels. A pixel samples only the two elevation tiles the quad blends (the ±7.5 degree bands don't
+  overlap; `vBlend`: the lower tile, the upper's weight), colour and normal: 4 atlas texels, not 8 (same image;
+  `slope` 2.67 -> 2.12 ms, `fogline` -0.4, `topdown700` -0.3, 9 km -0.3 on the dev GPU). The instance pass already leaves out the
+  ones sure to be dropped (`_impostorKept`: the quad's test at its widest enlargement); listed, they collapsed in the
+  vertex shader: from 9 km up the user's phone drew 898k impostors for a 288x521 screen and phase 2 retested them
+  all (`phonetop` at the phone's size: 1.35M listed -> 375k, same image).
+- The impostor draws (view and shadow map) have one instance per entry of the view's impostor list (`impListAttr`,
+  count in the counters at `IMP_ARGS`, the indirect args). The main view's is appended by phase 2 for the impostors
+  that pass its occlusion test (`impRetest`: phase 1 appends them itself when phase 2 won't run: `willOcclude`).
+  It was a flag per instance with a draw over all 2.5M instances x 6 vertices (twice), collapsing the unflagged:
+  a fixed cost no quality setting touched (the user's Mac at 4 fps; 4070 Ti ground view 6.6 -> 4.1 ms at tau 8).
+  An earlier note said appending was slower (900k threads on one atomic, ~5 ms): phase 2 appends only the visible
+  few thousand, and the retest list was already appending every impostor in view.
+- Until issue #30 half the trees (hash > 0.5, the mirrored ones) had no impostor: their quads were drawn with zero
+  width (TSL built the corner's x inside the mirroring's `select` branch, and the position read it unset: look for a
+  var assigned in one branch only in the WGSL when a node first used inside a `select`/`If` is used again outside
+  it; `.toVar()` it first), so they faded out at the switch and every calibration was done without them. Found by
+  rendering one tree alone in both paths (the splats below drew it, the quads didn't). All drawn and recalibrated
+  (`GROW`, `shadowgrow`, `impCov`, `impGain`, `groundshade`): before, the forest read up to 2.8/255 off all geometry
+  (`d1100` +1.6/-2.8/-2.6, `topdown700` -0.7/-2.7/-2.1) with the mid-distance stands visibly gappy. More quads
+  cost (render GPU, 1080p, dev GPU, production builds): `overview` +0.9, `slope` +0.75, `fogline` +0.55, `canopy`
+  +0.33, `topdown` +0.1, `d1500` +0.04 ms, ground views and `orbit` (splats) +0; at the phone's size `overview`
+  +0.55, `slope` +0.33, `topdown` and `phone9k` -0.2. Motion: `--dolly` slope 32 -> 11 flicker events, fogline the
+  same, `--sweep=lod` a little fewer jumps.
+- The impostor material's fragment does everything once (`buildImpostorMesh`; `--probe=wgsl` prints what three.js generates): the colour's Fn is built first, so it holds the tile samples and the alpha as vars and the emissive and normals read them. Written plainly, a pixel sampled the colour tile up to 4 times (15 samples in the code, 4 now) and shaded what it then discarded: a select's branches don't share temporaries, and a discard doesn't stop the shader, so the colour, the normals and the shadow's 5 taps (a position off the map skips them) are kept from those pixels by hand. Varyings 13 locations -> 5, most flat. `--probe=cost` old against new in one page, 1422x739 at pr 0.675, tau 8: `laptop` -18% of the frame's GPU time, `slope` -21%, `d1100` -8%, Lucy 0; means within 0.1/255 on 7 views. Trap: a node shared between branches is set only in the first it's built in (the gains read another tile's elevation, some crowns came out dark), so `uvOf` / `elevOf` build new nodes and what's shared is a root `toVar`. A var first assigned in a branch resets to its first value in the next: assign it at the root first (black impostors). Check the image, not just the numbers: both of those read as savings. The hardware leaves likewise (`_buildMesh` in `draw.ts`; 3 samples of the leaf a pixel -> 1, the colour and shadow only for pixels kept): `canopy` -13%, `ground` -5%, `laptop` 0, the same image; the resolves' shadow taps too. Against all that, drawing the chunks nearest first was slower (+0.12 ms on `laptop`).
+- Tiny impostors are splatted in compute (`src/nanite-lib/gpu/splats.ts`, Nanite's way with tiny triangles): from
+  `?splatalt=` (2 km) above the ground the instance pass lists an impostor under `?splatpx=` (3) px wide in the
+  impostor list from its top down (another buffer would be a 9th in the instance pass), and one thread per splat
+  walks its quad's pixels in the software rasterizer's visibility buffer (depth atomicMin, then the id with
+  `SPLAT_BIT`), as the quad would be drawn: size, elevation tiles, `MIN_PX` and thinning, the atlas alpha by
+  coverage against `ditherAlt`. A fullscreen resolve (phase 2 layer) shades those pixels as the impostor material
+  does (normal atlas, gains, tint, autumn, shadow, fog). One depth per splat (its centre's), so where two overlap
+  the nearer centre wins. Same image as the quads (`phone9k`: means within 0.1/255, isolated trees pixel for pixel);
+  dev GPU at the phone's size render 0.95 -> 0.59 ms, compute +0.21 (`orbit` at 1080p 0.94 -> 0.84); below 2 km
+  they cost more than they save on the dev GPU (`topdown` 1.8 km +0.06 ms; ~0.05 ms with none at all). `?splat=0`,
+  the profile's `imp splats off`; debug 5 shows them cyan. A phone's quads cost by their count (vertex work), so
+  its report is the measure.
+- Shadow casters' LOD: by the camera's pixels at `SHADOW_TAU_MUL` (5, `?shadowtau=`) x tau; at 2.5 they were 9M
+  triangles at full detail (the trees all round, for ~11 cm texels), at 5 half, same image. A texel floor (no caster
+  finer than a shadow texel) changed nothing: few casters are that close.
+- Shadow casters only where their shadow can land in the camera's view (`CastTest` in `chunks.ts`, the shadow view's
+  `sphereVisible`, `castLen` in `gpu/renderer.ts`): each chunk box, tree and cluster, swept away from the sun far enough
+  for the tallest tree's shadow to reach ground 60 m lower, must touch the camera's frustum. The map covers a square
+  around where the camera looks, kilometres wide from high up, and every caster in it was drawn: zoomed in looking
+  down from 544 m (`zoomdown --zoom=5`) 38M shadow triangles, 13 ms of a 17.9 ms frame (now 258k, 4.75 ms); on the
+  ground a third to half of the casters, -0.3..0.65 ms; images match but for scattered specks (`img.ts diff`).
+  `?castcull=0` for the old.
+- Software rasterizer (`src/nanite-lib/gpu/softraster.ts`, main view only): the cluster pass sends clusters whose triangles
+  average under `swArea` px² (`?swarea=`, default 4; `?sw=0` = hardware only) to a list that compute passes
+  rasterize into a visibility buffer: atomicMin of view depth, then atomicMax of (slot, triangle) + 1 where the
+  depth matches (no 64-bit atomics in WebGPU). A fullscreen quad on the phase 2 layer (`buildResolveMesh`) rebuilds
+  each pixel's triangle and shades it with a Lambert material whose normal, shadow position and depth are
+  overridden; fog is applied in its `outputNode`. Don't give its shared nodes names (`toVar('x')`): three.js
+  builds the normal in a separate sub-build that re-declares them, and the pixels came out black. Leaves emulate
+  three.js alpha to coverage (`smoothstep(0.5, 0.5 + fwidth(a), a)` against a fixed per-pixel threshold): a plain
+  0.5 cut made distant crowns solid. Check with `?debug=5` (software pixels orange) and `--ab="sw=0|sw=1"` (mean
+  colours should agree). Not in the HZB (it's built before) and not used for the shadow map yet. Only from the
+  splats' altitude up (2 km, `?swalt=`, 0 = everywhere; `sw.idle`, off again under 70% of it), where the splats need
+  its buffer: it costs ~0.36 ms a frame whatever it takes and computes each triangle's vertices in both walks, and
+  since the max-error bark DAG and the coverage-matched leaf levels few triangles are tiny (issue #8, in-page
+  `--probe=cost --query="cost=forest.sw.idle&swalt=0"`, 1080p High: off saved `overview` 0.73 ms, `d550` 0.55,
+  `canopyzoom` 0.46, `treeline` 0.45, `fogline` 0.34, `slope` 0.28, `zoomdown` 0.23, `d1100`/`topdown` 0.13, `canopy`
+  0.06; zoomed 5x 0.04-0.29; `orbit` and `phone9k` (splats) cost 0.22 / 0.37 more without it). It used to run from
+  25 m up (0.4-0.8 ms faster there before those DAG changes).
+- No MSAA under TAA (`samples` in `webgpu-start.ts`; WebGPU has 1 or 4): the hardware leaves do alpha to coverage with one
+  sample, three.js's `smoothstep(0.5, 0.5 + fwidth(a), a)` against the moving `ditherAlt` (`a2cDither` in
+  `shading.ts`), so only each leaf's 1 px edge is dithered and TAA averages it. 4x MSAA cost ~2.5 ms on High at 1080p
+  on the user's 4070 Ti (`plazane` 10.3 -> 8.6 ms frame, `canopy` 15.8 -> 12.7; same mean colours and turning
+  flicker). Not the plain filtered alpha as a probability: every card stacked in a pixel passed the same threshold,
+  so crowns didn't add up (pale, see-through) and their holes left the HZB nothing to occlude with. A plain 0.5
+  cut-out with one sample makes crowns solid and dark. 4x with `?taa=0`, `?leafalpha=a2c` or `?msaa=4`.
+- Temporal upscaling (`src/resolution.ts`, `src/taa.ts`; `?taau=0` off, `?outpr=`): the canvas at the device's
+  pixel ratio (up to 3), the scene at auto quality's (`?pr=`, the device's up to 1.5, times the scale). Before, the
+  canvas itself was rendered small and the browser stretched it: a DPR 3.75 phone at 1.5 (60% at start) showed each
+  pixel 2.5-4 screen pixels wide (the user: "blurry, no detail"). The history is at the canvas's size; each output
+  pixel gathers the 3x3 scene samples round its centre, weighted `exp(-k d^2 / ratio)` by their jittered distance in
+  output pixels (`?taakernel=` k, 5): the nearest sample alone speckled, k 2.29 (UE's Blackman-Harris fit) softened
+  the native image. The history's alpha holds the weight it has gathered, capped at (frames x ratio - 1) x a frame's
+  mean (`maxWeight`): upscaled, an output pixel gets a near sample only every ratio^2 frames, and 10 frames' worth
+  shimmered at 3x on the user's phone (66% at 9 km: "shimmer instead of blurry"; still `canopy` 566 -> 194 events,
+  turning 15679 -> 12526); a clipped or uncovered pixel still takes new samples quickly. The jitter cycles 8 x ratio^2 Halton offsets (every output pixel gets near samples). Its sign: the
+  projection offset moves the image left by jx and down by jy, so a sample sees what was jx right of and jy above its
+  texel's centre (`jitterOff`); the other signs reconstruct 15-40% further from native. Textures get a mip bias of
+  log2(scene / output pixels) (`mipBias` in `shading.ts`: bark, leaves, impostors, the software rasterizer;
+  `footprint()` scales the floor's and the cobbles' derivatives); 0 with TAA off. At native resolution it flickers less
+  turning than the old resolve (slope 1340 -> 1294, fogline 2359 -> 2266), same cost. At the phone's settings on the dev
+  GPU (`--size=384x832 --dpr=3 --query=touch=1`: 576x1248 -> 1152x2496) +0.15-0.3 ms; rendering at 3x instead
+  costs twice. Trees' LOD and the impostor sizes still go by the scene's pixels.
+- Temporal anti-aliasing (`src/taa.ts`, `?taa=0` / T to turn off): the camera is jittered by a sub-pixel Halton
+  offset each frame (`?taajitter=`: the whole pixel, half with MSAA, which does the geometric edges) *before* culling, so the
+  culling, the software rasterizer and the draws see the same camera; the dither pattern (`ditherShift`) moves every
+  frame too. The resolve rebuilds where each pixel was from the depth buffer and last frame's camera (undoing the
+  planet curvature's shift with the viewer), minus the trees' own wind motion: the scene target has a second output
+  `wind` (MRT), written by the tree materials (`mrtNode`, from `_vertex`'s `prevWorld` at `prevTime`), 0
+  elsewhere. The reprojection is one matrix (last frame's view-projection x this frame's inverse) multiplied on the
+  CPU in double precision: rebuilding the world position on the GPU in float32 from a depth near 1 fetched the
+  history up to half a pixel off with the camera standing still, every frame, and 3 km away through the 5x zoom the
+  blur plus the clipping turned crowns into ghosts (the user: "distant trees are washed"; `?taadebug=2` shows the
+  offsets, all zero when still; `?taafeedback=1` turns the accumulation off). History: Catmull-Rom lookup (bilinear blurred the swaying leaves), clipped to the 3x3 neighbourhood's
+  colour spread (YCoCg), wider for a pixel that hasn't moved (`BOX_STILL` 3 sigma, `?taastill=`, narrowing to 1.25 over a quarter of a pixel of motion: on the still camera, statue folds finer than the pixels changed the box with every jitter step, and the history never settled; the user, zoomed, side-on to the sun; `--probe=stillfilm` 13.4k -> 3.8k pixels, moving unchanged), blended 10% per frame in a perceptual space (square root of linear light, `?taaspace=linear`
+  for the old blend): averaged in linear light, the far pines' tips (sub-pixel specks against the bright sky) came
+  out as pale ghosts (the user: "ghosted peaks"; `peaks` view, ridge colour vs `taa=0&pr=2` at 800x450); the output adds a light unsharp mask
+  (`?sharpen=`). Small real trees shimmered in motion and impostors didn't: that's what made the switch band
+  visible while moving (`--dolly` on `slope`: 71 flicker events -> 9). Costs ~0.5 ms GPU. The resolve reads the god rays once for its 3x3, dilates the depth over the cross and takes the history's weight from a Catmull-Rom tap (`?taalean=0` the old): 34 reads a pixel -> 21, the same image (`slope`, `sunrays`), 6% of it on the dev GPU at 4K. Its history has its own size (`res.taa`, `taa.size`); `?out4k=1` keeps the canvas at the display's pixels under the caps and the output pass upscales (bilinear: looked like the browser's stretch), `?taapr=` sets the cap.
+- Far shimmer under TAA: distant trees were hard cut-outs (impostor alpha sharpened by `impostorCoverage`, software
+  leaves by the a2c smoothstep), so each few-pixel crown was a blob that hit or missed pixels, and TAA's history
+  clipping let that through when turning. With TAA on, impostors and software-rasterized leaves instead draw each
+  pixel with the probability of its filtered alpha (= its coverage) against the moving dither, and TAA averages it
+  (`?impalpha=dither|cut`, `?leafalpha=dither|a2c`; scales `?impcov=0.9`, `?leafcov=0.9` match the geometry's mean colour;
+  `impcov` 0.94 matches exactly but the turning test flickers ~15% more). That alpha test uses `ditherAlt`, a pattern
+  independent of the cross-fade's `dither`: an offset copy of the same noise is nearly the same pattern, and in the
+  cross-fade band it passed almost all or almost none of a tree's pixels (a darker band at the switch on the fog line).
+  Turning test (`--dolly --step=0 --turn=0.2`, numbers drift between setups: compare A/B in one run): fogline ~2050,
+  slope ~1125 flicker events with TAA, slope ~3840 without.
+- God rays (`src/godrays.ts`, R, `?rays=` strength, `?raydecay=`, `?rayfall=` fade with the distance from the sun
+  on screen: without it a sun just above the view washed the whole screen, the user's phone too): screen-space radial march towards the sun over
+  the depth buffer at half resolution, open sky near the sun's disc as the source. Added to the scene colour inside
+  the TAA resolve (`TAA`'s `extra`), so its per-pixel jittered march start is averaged: added after TAA, the
+  40-sample march left stair-steps along the shafts. `sunrays` view (sun behind the canopy). Clouds don't block it.
+- The output's unsharp mask runs in x/(1+x): in linear HDR it made a black ring round the sun.
+- Frames in flight (`src/webgpu-start.ts`'s loop): at most `?gpuqueue=` (2) frames between submit and GPU done; past that
+  the display frame is skipped. Without it a GPU that can't keep up builds a queue of seconds, and on an iGPU the desktop's
+  compositor waits behind it: input lags system-wide. The report's gpu line ends with the eased submit-to-done time. The WebGL
+  mode has no such limit (no submitted-work callback).
+- Walking (`src/controls.ts`): on the ground at eye height 1.7 m with gravity; Space jumps, Space again in the air
+  flies; flying down onto the ground walks again. Off under the harness (views are placed in the air) unless
+  `?walk=1`; `--probe=walk --query=walk=1` checks it.
+- Touch controls (`src/touch.ts`, GitHub issue #1): a floating stick under the left thumb, look drag on the right,
+  hold buttons for up / down / zoom; they feed `FlyControls.analog` and yaw/pitch. On by `(pointer: coarse)`, or
+  `?touch=1|0`; the harness only with `touch=1` (`--probe=touch` fires synthetic finger events and checks each
+  control responds).
+- The scene target's alpha is not shown: the output pass writes alpha 1. Alpha-to-coverage leaves left alpha < 1
+  there, and the canvas showed the light-blue page background through them (the whole forest read paler and bluer).
+- **Storage buffers per shader: at most 8** (WebGPU's guaranteed minimum; a Mac allowed fewer than our shaders
+  bound, and the cluster passes failed: only impostors, "semitransparent trees"). Hence the merged buffers: per
+  tree one `inst` buffer (2 vec4s, `_a`/`_b`), per vertex one `vtx` (`_vtx`), per cluster 5 vec4s in `cData` with
+  the meta bit-cast in the 5th (`_cd`/`_meta`), one list buffer per set (bark, then leaves), and per view one
+  counters buffer (`makeCounters` in `constants.ts`: draw args at offsets, stats, item count, retest and
+  software-raster counts). A shader uses one access mode of the counters (`atomic` + atomicLoad where it reads and
+  adds). Check new passes with `?maxsb=8` (caps the device limit): no validation errors in `console.log`.
+- Occlusion culling (`src/nanite-lib/gpu/culling.ts`, `hzb.ts`, main view only): two phases per frame. Phase 1 tests trees and clusters
+  against *last* frame's HZB (built with last frame's camera, read through the same uniforms before they're
+  updated) and draws what passes; `occlusion()` then rebuilds the HZB from this frame's depth (max over each
+  pixel's samples, `sceneRT.depthTexture`) and retests the failures; what's visible is drawn by the phase 2
+  meshes (layer `PHASE2_LAYER`, a second `renderer.render` with autoClear and shadow updates off). Impostors are
+  drawn there too, tested once against this frame's HZB (they're listed in the retest list with `IMP_BIT`; hidden
+  ones get their flag cleared). Clouds are on that layer too, so they're drawn after every tree. Check with the
+  `bark` view (one trunk fills the screen): occlusion off draws 67M tris, on ~0.6M. Only below `OCC_ALTITUDE` (150 m above the
+  ground, `?occalt=`; `forest.occlusionOn` is the menu's switch): from above little hides anything and its passes
+  cost (260 m up 0.24 ms, 8.8 km 0.4, a phone 9%), and the gap closing culled some visible 2-3 px trees (the user:
+  "disappearing trees when going up"). Foliage's gaps let far depth
+  into every block of a max pyramid: on the ground 86% of the drawn triangles were hidden (`--probe=visible
+  --query=ids=1`). Gaps up to 2 px are closed before it's built (`HZB_CLOSE`, `?hzbclose=`: not conservative, 1% of
+  the seen triangles lost, no added flicker; -0.6..0.9 ms on the ground). A test reads 8x8 texels (`HZB_TAPS`) at a
+  level where the rect spans at most 8; spheres grow by the wind's reach at the part's height (`windMargin`: it was
+  10% of the tree + 0.5 m for every part). `--probe=cullcheck` sorts what's still drawn but unseen. The HZB lookup reads up to 4x4 texels of a finer level than
+  usual: at 2x2 the texels near the horizon take in sky and nothing is ever occluded.

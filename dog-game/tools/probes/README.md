@@ -1,0 +1,52 @@
+# Probes
+
+Page-side measurements, run by the harness after each view (`npm run harness -- --probe=<name>[,<name>]`).
+Write a measurement here once and reuse it; don't paste one-off probes into `--eval` or `tools/tmp/`. Retyped probe
+code drifts from the demo, and a probe that silently measures nothing looks the same as a clean result.
+
+A probe file holds one TypeScript expression, an async function `(demo: Demo, view) => result` (`import type { Demo }
+from '../../src/harness-api.ts'` above it; the harness strips the types before the page evaluates it):
+
+- `demo` is `window.__demo` (renderer, scene, camera, forest, controls, `renderOnce()`, `setView()`, `stats()`...)
+- `view` is the harness view it runs after (already set and benchmarked)
+- the result is printed and stored in `report.json` under the view's `probes`; a `png` field holding a data URL is
+  saved as `tools/out/<probe>-<view>.png` instead
+
+| probe | what it returns |
+| --- | --- |
+| `wgsl` | the WGSL three.js generated: every fragment module by size with its texture samples; `?wgsl=` a word its code holds (a varying, `vImpTile`): that module's vertex and fragment code too |
+| `occlusion` | occlusion culling counters: trees and clusters failing phase 1, trees hidden after phase 2, draws per phase |
+| `hzb` | the depth pyramid: levels, and a sparse sample of level 0 and 5 (to see that it holds the scene) |
+| `stillfilm` | the camera still in the page's loop: which pixels change over consecutive frames, pixel by pixel (`?filmyaws=` per direction); the worst tile's frames and the whole screen's range in `png` |
+| `stillcounts` | clusters and triangles of both views frame by frame with the camera still (`?countyaws=`): they should stand still |
+| `zoomsweep` | what's drawn at each zoom level through the zoom (`?zoomms=3000` eases it slowly): triangles, clusters, geometry and impostors |
+| `lowend` | auto quality's low-end tiers on a GPU too fast to need them: the budget out of reach until the last tier, then well above until tier 0; the steps, and the image at each tier in `png` |
+| `caps` | the culling's fixed-size lists over frames with the camera still (work items, bark, leaves, software clusters, retest): which hit their cap, and how far the counts swing (over a cap, what's dropped differs per frame) |
+| `zoomfilm` | the zoom frame by frame in the page's loop (`?filmms=`, `?filmstep=`): zoom, tau, scale and pixels changed against the film's last frame every 100 ms, and a sheet of frames (`--zoomtime`'s screenshots take over a second each) |
+| `zoompan` | frame times and GPU ms zoomed, the camera still and then panning at ?panrate= rad/s (default 0.2), in the page's loop; ?panzoom= (default the maximum) |
+| `listguard` | [ pressed until tau is at its minimum, zoomed: the fullest lists and the guard's factor over 3 s (`src/nanite-lib/gpu/list-guard.ts`) |
+| `zoommanual` | a preset or manual tau across the zoom (`--query="auto=0&tau=2"`): tau and clusters zoomed, tau back unzoomed, and a tau set with the [ key while zoomed staying through the zoom out |
+| `atlas` | the impostor atlas (albedo) as a PNG, cut-out alpha shown blue |
+| `perf` | the performance panel (`--query=perf=1`): its report text and whether it's on screen |
+| `auto` | auto quality in the real loop for 8 s against `?autobudget=` (default 3 ms): settled tau, resolution scale, GPU ms (use `--timeout=120`) |
+| `autosim` | auto quality against a made-up slow, noisy GPU (`--query="auto=1&autosim=x,noise,pixels,output"`: the real GPU ms x `x`, plus `pixels` ms at full resolution and `output` ms per million canvas pixels; `--device=amd` sets the reference PC's, +-`noise` every 500 ms; `?simbudget=` 13.3, `?simsecs=` 50): a row every 2 s (canvas size too) and its steps, to replay a device's report (use `--timeout=100`) |
+| `gpuqueue` | frames queued on the GPU in the page's loop (`?gpuqueue=0|1`): each frame's submit-to-done ms (median, p95) against its GPU time, fps; headless still queues, so run it on the AMD PC (`npm run remote`) |
+| `autozoom` | auto quality across the 5x zoom: 4 s each unzoomed / zoomed / unzoomed / zoomed at the view (`canopyzoom --zoom=1`), per phase how long it was over the budget, frames over twice it, the longest frame, resolution changes, tau/scale every 250 ms (`--timeout=120`) |
+| `visible` | trees, clusters and triangles drawn vs seen (`--query=ids=1`: debug 6 writes each pixel's tree and cluster to the scene target; hardware geometry only): what occlusion culling leaves on the table |
+| `cullcheck` | why drawn-but-unseen clusters weren't culled (`--query=ids=1`): an exact-rect test on the CPU against HZB level 0 sorts them into "a finer test would get it", "only without the wind margin", "something farther shows in its rect"; triangles of each; and two tighter bounds (#7): an exact box rect (`boxCull`) and bark clusters facing away (`backface`) |
+| `fulldetail` | what the view would cost without Nanite: the plants in the view frustum (within the view distance) and their full-detail triangles, counted on the CPU (README's with/without table: time a small forest, `trees=2000&tau=0.01&imppx=0&occ=0&sw=0&shadows=0`, and scale by this count) |
+| `profileui` | the GPU profile as a person runs it: clicks Profile GPU in the menu, reads the progress banner until done, leaves it for the screenshot (`--timeout=300`) |
+| `profile` | the panel's GPU profile in the real loop: median render/compute ms with each feature switched off in turn (`--timeout=240`) |
+| `menu` | the settings menu: opens it with Esc, clicks each switch and the quality presets, reads the state back; leaves it open for the screenshot |
+| `autumn` | autumn levels: share of green / yellow / red trees, the nearest stand of each (spots of the `autumn*` views) and the cover map's fallen leaves there |
+| `litter` | the litter map round the camera (src/ground/litter-map.ts): kind of leaf, amount and autumn level at the camera and 3 m around it, share of each kind |
+| `walk` | walking (`--query=walk=1`): stands at eye height, walks, jumps, double-jumps into flight, flies down and lands walking |
+| `lodcut` | the DAG cut per tree type by its height on screen (10..400 px, at the page's tau), on the CPU: bark and leaf triangles and clusters, the deepest level, and each level's median error |
+| `music` | background music (`--query=music=1`): nothing fetched before a gesture, a click starts it, M mutes and unmutes it (on, paused, time, volume at each step) |
+| `touch` | touch controls (`--query=touch=1`): synthetic finger events, how far the stick moved, the drag turned, the buttons climbed and zoomed; `stuck` lists what failed |
+| `grass` | the grass keep passes (src/grass-keep.ts), per ring: cells tested this frame (tiles in view), blades kept and drawn, the list's size (`kept` should stay well under `cap`) |
+| `cost` | what scene objects cost on the GPU (`?cost=grass,webgl-forest`, names): each switched off and on in alternating blocks of `?costframes=` frames in one page, the median GPU ms on and off (runs of the same build swung ~2x: separate variants can't measure a ms; the WebGL mode's timer queries too); `name@other` swaps a mesh's material for another's instead (`terrain@terrain-high`: the forest floor's shader over the plain ground's); a dotted name flips a boolean of the demo (`forest.leafPrepass.mode` with `?leafpre=1`: the leaves' depth prepass); `a;b` switches objects together (`nanite-leaves-main-pre;nanite-leaves-main-after`) |
+| `gltris` | the WebGL mode's forest (`--query=webgl=1`): triangles, instances and meshes by kind (bark, leaves, statues, impostors, grass rings) and near level |
+| `shaders` | every compiled WGSL program (vertex, fragment, compute) as a hash and length, sorted, generated ids renumbered (`--query=shaderdump=1` adds the code): two builds that should draw the same, compared program by program |
+| `shadowmap` | the sun's shadow map after the view (src/lighting.ts): size, half-extents across the sun and up it (light space), a texel on the ground both ways, the focus |
+| `nodebuild` | each visible material's compile (a clone, for the canvas's target): the whole time and the main thread's share (three.js's node builder; the rest is the GPU process), slowest first: what a load waits on in `Compiled the materials` |
