@@ -47,6 +47,8 @@ export interface HudContext {
   harness: boolean;
   /** the dog's speed when a dog player runs (the camera's own velocity stays 0 then) */
   speed?(): number;
+  /** multiplayer's line ("3 in the forest"); absent without it */
+  players?(): string;
   shadowsOn(): boolean;
 }
 
@@ -90,6 +92,7 @@ export function createHud(ctx: HudContext) {
       // (the Lucy scene's: statues alone, src/scene.ts)
       forest.treeCount ? ['forest', `${millions(forest.treeCount)} trees + ${millions(forest.instanceCount - forest.treeCount - forest.statueCount)} bushes + ${forest.statueCount} statues`] : ['scene', `${millions(forest.statueCount)} statues`],
       ['altitude', `${Math.round(agl())} m · ${Math.round(ctx.speed?.() ?? controls.velocity.length())} m/s`],
+      ...(ctx.players ? [['players', ctx.players()]] : []),
       ['clusters', `${(gs.barkClusters + gs.leafClusters + (gs.swClusters ?? 0)).toLocaleString()} (${gs.barkClusters.toLocaleString()} bark · ${(gs.swClusters ?? 0).toLocaleString()} software)`],
       // (every triangle drawn: the clusters' in hardware and software, and the impostors' quads, 2 each)
       ['triangles', `${short(tris + (gs.swTris ?? 0) + gs.impostors * 2)} = ${short(tris)} hw + ${short(gs.swTris ?? 0)} sw + ${short(gs.impostors * 2)} impostors`],

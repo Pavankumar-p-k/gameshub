@@ -20,6 +20,8 @@ import type { createCompass } from './compass.ts';
 import type { createMusic } from './music.ts';
 import type { createResolution } from './resolution.ts';
 import type { DogPlayer } from './dog/player.ts';
+import type { Strays } from './dog/strays.ts';
+import type { Multiplayer } from './net.ts';
 import type { TAA } from './taa.ts';
 import type { GodRays } from './godrays.ts';
 import type { DemoState } from './harness-api.ts';
@@ -40,6 +42,8 @@ export interface FrameContext {
   controls: FlyControls;
   touch: TouchControls | null;
   dog: DogPlayer | null;
+  strays: Strays | null;
+  net: Multiplayer | null;
   demo: DemoState;
   TREE_COUNT: number;
   terrain: THREE.Group;
@@ -65,7 +69,7 @@ export interface FrameContext {
 
 /** The frame function: `frame(dt)` advances the world by dt seconds and draws it. */
 export function createFrame(c: FrameContext): (dt: number) => void {
-  const { renderer, scene, camera, controls, touch, dog, demo, TREE_COUNT, terrain, forest, clouds, grass, litter, waypoint, compass, music, res, size, sceneRT, sceneMRT, taa, rays, output, typeMasks, fitToWindow, shadowsOn } = c;
+  const { renderer, scene, camera, controls, touch, dog, strays, net, demo, TREE_COUNT, terrain, forest, clouds, grass, litter, waypoint, compass, music, res, size, sceneRT, sceneMRT, taa, rays, output, typeMasks, fitToWindow, shadowsOn } = c;
   const { sun, fogNear, fogFar, follow, fitShadowMap, shadowFarOnly } = c.lighting;
   let time = 0;
   return function frame(dt: number): void {
@@ -74,6 +78,8 @@ export function createFrame(c: FrameContext): (dt: number) => void {
     touch?.update();
     controls.update(dt);
     dog?.update(dt); // (moves the dog, then places the camera in third person behind it; the clamps below hold it)
+    strays?.update(dt); // (the wanderers' own locomotion, src/dog/strays.ts)
+    net?.update(dt); // (sends ours, eases the other players' dogs, src/net.ts)
     // stay above the ground
     const gy = heightAt(camera.position.x, camera.position.z) + 0.6;
     if (camera.position.y < gy) camera.position.y = gy;

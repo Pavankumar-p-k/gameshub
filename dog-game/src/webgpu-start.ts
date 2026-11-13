@@ -35,6 +35,10 @@ import { Precompile, warmUp } from './warmup.ts';
 import { buildForest } from './webgpu-forest.ts';
 import { createFrame } from './webgpu-frame.ts';
 import { createDogPlayer } from './dog/player.ts';
+import { createNameTag } from './dog/nametag.ts';
+import { createStrays } from './dog/strays.ts';
+import { createMultiplayer } from './net.ts';
+import { createPetName } from './petname.ts';
 import type { AutoQuality } from './hud.ts';
 import type { LoadingScreen } from './loading.ts';
 import type { FloorMaps } from './ground/floor.ts';
@@ -168,20 +172,47 @@ export async function startWebGPU(o: WebGPUStart): Promise<void> {
   const dogArg = params.get('dog');
   const dogOn = dogArg !== '0' && (dogArg !== null || !HARNESS);
   const dogLim = forestRadius(TREE_COUNT) * 2; // (the frame clamps the camera to this)
+  const dogBounds = { minX: -dogLim, maxX: dogLim, minZ: -dogLim, maxZ: dogLim };
+  const petName = createPetName(); // (typed on the entry screen: index.html #start)
   const dog = dogOn
     ? createDogPlayer({
         scene, camera, controls,
         x: camera.position.x, z: camera.position.z,
         breed: dogArg && dogArg !== '1' ? dogArg : undefined,
         coat: Number(params.get('dogcoat') ?? 0),
-        bounds: { minX: -dogLim, maxX: dogLim, minZ: -dogLim, maxZ: dogLim },
+        bounds: dogBounds,
       })
     : null;
   if (dog) {
     pre.add(dog.actor.group); // (its shaders compile with the rest, while the load runs)
-    document.querySelector('#start div')?.replaceChildren('Click to run with your dog — Esc for settings');
+    // the pet's name over its head (live: the field stays editable from the menu's Esc)
+    const tag = createNameTag(petName.get(), dog.actor.size * 0.85);
+    tag.sprite.position.set(0, dog.actor.size * 1.8, 0);
+    dog.actor.group.add(tag.sprite);
+    petName.onChange((n) => tag.set(n));
+    document.querySelector('#start-hint')?.replaceChildren('Click to run with your dog — Esc for settings');
     if (touch) document.querySelector('#help-touch')?.replaceChildren('left thumb: run the dog · right thumb: look · ▲ jump · 5× zoom');
   }
+
+  // strays that arrive one by one when you join and wander around (src/dog/strays.ts): `?strays=0` off, =N a count
+  const straysArg = params.get('strays');
+  const strays = straysArg !== '0' && (straysArg !== null || !HARNESS)
+    ? createStrays({
+        scene, bounds: dogBounds,
+        around: () => (dog ? dog.actor.position : camera.position),
+        count: straysArg && straysArg !== '1' ? Math.max(1, Math.min(20, Number(straysArg) || 6)) : 6,
+      })
+    : null;
+
+  // multiplayer (the dev server relays it: vite.config.ts on /ws): `?mp=0` off, `?mp=1` under the harness too
+  const mpArg = params.get('mp');
+  const net = dog && mpArg !== '0' && (mpArg !== null || !HARNESS)
+    ? createMultiplayer({
+        scene, actor: dog.actor, name: petName.get,
+        breed: dogArg && dogArg !== '1' ? dogArg : 'labrador', coat: Number(params.get('dogcoat') ?? 0),
+        bounds: dogBounds,
+      })
+    : null;
 
   function setShadows(on: boolean): void {
     shadowsOn = on;
@@ -263,7 +294,7 @@ export async function startWebGPU(o: WebGPUStart): Promise<void> {
   const waypoint = createWaypoint(HARNESS && params.get('waypoint') !== '1');
   const compass = createCompass(waypoint.target, HARNESS && params.get('waypoint') !== '1');
   const frame = createFrame({
-    renderer, scene, camera, controls, touch, dog, demo, TREE_COUNT, terrain, forest, clouds, grass, litter, lighting, waypoint, compass, music, res, size,
+    renderer, scene, camera, controls, touch, dog, strays, net, demo, TREE_COUNT, terrain, forest, clouds, grass, litter, lighting, waypoint, compass, music, res, size,
     sceneRT, sceneMRT, taa, rays, output, typeMasks, fitToWindow, shadowsOn: () => shadowsOn,
   });
 
@@ -273,6 +304,7 @@ export async function startWebGPU(o: WebGPUStart): Promise<void> {
     harness: HARNESS && params.get('perf') !== '1', // (?perf=1: the panel under the harness too)
     adapterName: [ai.vendor, ai.architecture, ai.description].filter(Boolean).join(' ') || 'unknown adapter',
     speed: dog ? () => dog.actor.speed : undefined, // (the camera never moves on its own then)
+    players: net ? () => net.status() : undefined, // (the HUD's row; absent without multiplayer)
   });
   const updateHud = hud.update;
   demo.perfReport = () => hud.perf?.report();

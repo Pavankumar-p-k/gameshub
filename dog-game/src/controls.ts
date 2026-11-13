@@ -82,6 +82,9 @@ export class FlyControls {
     });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('keydown', (e) => {
+      // typing the pet's name (index.html #start): the field keeps every key, the game none of them
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       // swallow browser shortcuts (Ctrl+S/D/F...) while flying (not F11: the browser's fullscreen)
       if ((this.locked || e.ctrlKey) && e.code !== 'F11') e.preventDefault();
       if (!e.repeat) this.onKey?.(e.code, e);
